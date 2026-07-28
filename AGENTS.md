@@ -27,7 +27,24 @@ Build a reliable bridge between CLI agents. The platform must coordinate Claude 
 
 ## Current milestone
 
-Milestone 0 foundation. The next milestone is a CLI capability spike, not full feature development.
+Milestone 1 CLI capability spike is complete: `docs/spikes/M1_CLI_CAPABILITY_REPORT.md`.
+
+- **B1 — fixed.** The `ProcessManager` timeout path called `os.killpg`, which does not
+  exist on Windows, and no WSL distribution is installed on the target machine.
+  Termination is now platform-dispatched; the POSIX branch remains unexercised against
+  a real process group.
+- **B2 — contained.** Codex `-s workspace-write` was observed writing above the
+  workspace root. Rules 6 and 7 are now enforced by the orchestrator rather than the
+  worker: ADR-010 and `execution/workspace_guard.py`.
+
+Rule 7 in practice: a write task runs in a worktree that is the only entry in its run
+directory, that run directory carries a deny-write barrier, and the run is bracketed by
+`WorkspaceContainment` so writes outside it fail the run. `WORKTREE_ROOT` must be
+outside the repository; the application refuses to start otherwise.
+
+`execution/worktree_manager.py` implements that layout, and the Claude Code and Codex
+adapters are implemented against the recorded argv templates. Wiring the orchestrator
+to the workflow graph is next.
 
 ## Allowed work in Milestone 0
 
