@@ -288,6 +288,28 @@ def test_review_runs_in_a_fresh_session(harness) -> None:
     assert review_request.resume_from is None
 
 
+def test_each_worker_gets_its_own_model(harness) -> None:
+    """A model name means something to one provider only.
+
+    A live smoke test failed with `kind=model` when a single config field sent a
+    Claude alias to Codex. ADR-004 keeps Model and Worker Adapter separate.
+    """
+    runner, claude, codex, _ = harness
+    runner.config.models = {"claude_code": "sonnet"}
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+
+    assert claude.requests[0].model == "sonnet"
+    # No entry means no --model flag, so codex keeps its own default.
+    assert codex.requests[0].model is None
+
+
 def test_read_only_nodes_get_no_tools(harness) -> None:
     runner, claude, _, _ = harness
     claude.queue(structured_result={"plan": []})

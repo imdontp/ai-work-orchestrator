@@ -73,7 +73,12 @@ class RunnerConfig:
     #: Commands re-run mechanically after a write node. Empty means nothing is proven.
     verification_commands: list[VerificationCommand] = field(default_factory=list)
     node_timeout_seconds: int = 1800
-    model: str | None = None
+    #: Model per worker requirement, e.g. {"claude_code": "sonnet"}. Keyed rather than
+    #: a single value because a model name is meaningful only to one provider: a live
+    #: smoke test failed with `kind=model` when a Claude alias reached Codex. ADR-004
+    #: keeps Model and Worker Adapter separate; one shared field conflated them.
+    #: A worker with no entry gets no --model flag and uses its own default.
+    models: dict[str, str] = field(default_factory=dict)
     #: Tools granted to a write node. Read-only nodes always get none.
     write_tools: tuple[str, ...] = ("Read", "Write", "Edit", "Bash")
 
@@ -375,7 +380,7 @@ class WorkflowRunner:
             output_schema_path=None,
             timeout_seconds=self.config.node_timeout_seconds,
             environment={},
-            model=self.config.model,
+            model=self.config.models.get(node.worker_requirement),
             resume_from=resume_from,
             allowed_tools=self.config.write_tools if node.needs_worktree else (),
             filesystem_access="scoped_write" if node.needs_worktree else "read_only",
