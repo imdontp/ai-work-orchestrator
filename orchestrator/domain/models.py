@@ -44,6 +44,9 @@ class Task(BaseModel):
     task_type: str
     objective: str
     acceptance_criteria: list[str] = Field(min_length=1)
+    # Present in contracts/task.schema.json but missing from this model until the
+    # context builder needed it. `scope`, `inputs` and `metadata` are still absent.
+    constraints: list[str] = Field(default_factory=list)
     permissions: TaskPermissions
     expected_outputs: list[str] = Field(min_length=1)
     state: TaskState = TaskState.PENDING
