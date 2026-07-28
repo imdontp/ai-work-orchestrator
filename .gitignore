@@ -46,6 +46,7 @@ runs/*
 !runs/.gitkeep
 worktrees/*
 !worktrees/.gitkeep
+!worktrees/README.md
 sessions/
 transcripts/
 *.log
