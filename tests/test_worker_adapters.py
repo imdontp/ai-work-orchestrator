@@ -167,8 +167,13 @@ def test_claude_argv_inlines_the_schema_because_the_cli_wants_a_string(
     schema.write_text('{"type":"object"}', encoding="utf-8")
 
     argv = claude.build_argv(_request(tmp_path, output_schema_path=schema))
+    value = argv[argv.index("--json-schema") + 1]
 
-    assert argv[argv.index("--json-schema") + 1] == '{"type":"object"}'
+    # A string, not a path. Contents may be reshaped for the CLI - see
+    # test_claude_strips_the_dialect_reference_from_a_contract - but the constraints
+    # come through unchanged.
+    assert json.loads(value) == {"type": "object"}
+    assert value != str(schema)
 
 
 # ---------------------------------------------------------------------------
@@ -258,9 +263,100 @@ def test_codex_argv_passes_the_schema_as_a_path(codex: CodexAdapter, tmp_path: P
     schema.write_text('{"type":"object"}', encoding="utf-8")
 
     argv = codex.build_argv(_request(tmp_path, output_schema_path=schema))
+    value = Path(argv[argv.index("--output-schema") + 1])
 
-    assert argv[argv.index("--output-schema") + 1] == str(schema)
+    # A path, not inline JSON. It points at the derived schema rather than the
+    # contract - see test_codex_derives_a_strict_schema_instead_of_passing_the_contract.
+    assert value.is_file()
+    assert json.loads(value.read_text(encoding="utf-8"))["type"] == "object"
     assert "--output-last-message" in argv
+
+
+def test_codex_derives_a_strict_schema_instead_of_passing_the_contract(
+    codex: CodexAdapter, tmp_path: Path
+) -> None:
+    """OpenAI's response_format subset rejects our contracts verbatim.
+
+    Measured against the real API: first `schema must have a 'type' key`, then
+    `'required' ... including every key in properties. Missing 'sha256'`, then
+    `'additionalProperties' is required to be supplied and to be false` for an object
+    with no properties. The derivation belongs in the adapter, not the contract.
+    """
+    contract = tmp_path / "contract.json"
+    contract.write_text(
+        json.dumps(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://example/contract.json",
+                "title": "Thing",
+                "type": "object",
+                "required": ["a"],
+                "properties": {
+                    "a": {"type": "string"},
+                    "b": {"type": "array", "items": {"type": "string"}, "default": []},
+                    "metadata": {"type": "object"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    request = _request(tmp_path, output_schema_path=contract)
+
+    argv = codex.build_argv(request)
+    derived = Path(argv[argv.index("--output-schema") + 1])
+    schema = json.loads(derived.read_text(encoding="utf-8"))
+
+    assert derived != contract, "the published contract must not be handed over as-is"
+    assert "$schema" not in schema and "$id" not in schema and "title" not in schema
+    # Every property promoted to required, every object closed.
+    assert schema["required"] == ["a", "b", "metadata"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["metadata"]["additionalProperties"] is False
+    assert schema["properties"]["metadata"]["required"] == []
+    assert "default" not in schema["properties"]["b"]
+    # The contract itself is untouched.
+    assert "$schema" in json.loads(contract.read_text(encoding="utf-8"))
+
+
+def test_codex_writes_the_derived_schema_without_a_bom(
+    codex: CodexAdapter, tmp_path: Path
+) -> None:
+    contract = tmp_path / "contract.json"
+    contract.write_text(json.dumps({"type": "object", "properties": {}}), encoding="utf-8")
+
+    argv = codex.build_argv(_request(tmp_path, output_schema_path=contract))
+    derived = Path(argv[argv.index("--output-schema") + 1])
+
+    assert not derived.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+def test_claude_strips_the_dialect_reference_from_a_contract(
+    claude: ClaudeCodeAdapter, tmp_path: Path
+) -> None:
+    """`--json-schema` fails on a contract verbatim: it does not resolve $schema."""
+    contract = tmp_path / "contract.json"
+    contract.write_text(
+        json.dumps(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "https://example/contract.json",
+                "title": "Thing",
+                "type": "object",
+                "properties": {"verdict": {"type": "string"}},
+                "required": ["verdict"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    argv = claude.build_argv(_request(tmp_path, output_schema_path=contract))
+    schema = json.loads(argv[argv.index("--json-schema") + 1])
+
+    assert "$schema" not in schema
+    assert "$id" not in schema
+    # Constraints survive; only the identity keywords go.
+    assert schema["required"] == ["verdict"]
+    assert schema["properties"]["verdict"] == {"type": "string"}
 
 
 def test_codex_refuses_a_schema_file_with_a_bom(codex: CodexAdapter, tmp_path: Path) -> None:

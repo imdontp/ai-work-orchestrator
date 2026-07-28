@@ -30,6 +30,10 @@ class WorkerRequest:
     output_schema_path: Path | None
     timeout_seconds: int
     environment: dict[str, str]
+    #: The agent profile's role definition, from prompts/<profile>/system.md. Adapters
+    #: apply it however their CLI allows — Claude Code has a flag for it, Codex has
+    #: none and gets it prepended to the payload.
+    system_prompt: str | None = None
     #: Model alias or full name. ``None`` leaves the choice to the CLI's own default.
     model: str | None = None
     #: Session id the orchestrator assigns to a new session. Claude Code accepts one;

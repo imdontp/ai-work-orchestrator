@@ -106,7 +106,7 @@ class CodexAdapter(CliWorkerAdapter):
         if request.model:
             argv += ["--model", request.model]
         argv += self._schema_arguments(request)
-        argv.append(request.prompt)
+        argv.append(_with_system_prompt(request))
         return argv
 
     def _build_resume_argv(self, request: WorkerRequest) -> list[str]:
@@ -115,16 +115,18 @@ class CodexAdapter(CliWorkerAdapter):
         if request.model:
             argv += ["--model", request.model]
         argv += self._schema_arguments(request)
-        argv.append(request.prompt)
+        argv.append(_with_system_prompt(request))
         return argv
 
     def _schema_arguments(self, request: WorkerRequest) -> list[str]:
         if request.output_schema_path is None:
             return []
         self._reject_bom(request.output_schema_path)
+        derived = request.log_dir / f"{request.run_id}.output-schema.json"
+        _write_strict_schema(request.output_schema_path, derived)
         return [
             "--output-schema",
-            str(request.output_schema_path),
+            str(derived),
             "--output-last-message",
             str(request.log_dir / f"{request.run_id}.last-message.json"),
         ]
@@ -217,6 +219,65 @@ class CodexAdapter(CliWorkerAdapter):
             "auth": {"status": status_text[:200] or None},
             "flag_surface": flags,
         }
+
+
+#: Keywords OpenAI's response_format subset does not accept, or that only identify the
+#: document. Observed by feeding it our contracts and reading the 400s back.
+_UNSUPPORTED_KEYWORDS = frozenset({"$schema", "$id", "title", "default"})
+
+
+def _write_strict_schema(source: Path, destination: Path) -> Path:
+    """Derive an OpenAI-acceptable schema from a published contract.
+
+    ``--output-schema`` feeds OpenAI's ``response_format``, which enforces a strict
+    subset: every key in ``properties`` must also appear in ``required``, and several
+    keywords are rejected outright. Our contracts are ordinary JSON Schema and use
+    optional properties, so passing one verbatim fails with, for example,
+    ``'required' is required to be supplied and to be an array including every key in
+    properties. Missing 'sha256'``.
+
+    The derivation lives here rather than in the contract because it is provider
+    knowledge. Widening ``required`` only constrains the model's *output*; it does not
+    change what the contract accepts, so the published wire format is untouched.
+    """
+    schema = json.loads(source.read_text(encoding="utf-8"))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    # BOM-free: codex rejects a schema file that carries one.
+    destination.write_text(json.dumps(_strictify(schema), indent=2), encoding="utf-8")
+    return destination
+
+
+def _strictify(node: Any) -> Any:
+    if isinstance(node, list):
+        return [_strictify(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+
+    result = {
+        key: _strictify(value)
+        for key, value in node.items()
+        if key not in _UNSUPPORTED_KEYWORDS
+    }
+    # Every object needs properties, a matching required list, and closed extras -
+    # including one declared with no properties at all, such as `metadata`, which is
+    # rejected with "'additionalProperties' is required to be supplied and to be false".
+    if result.get("type") == "object" or isinstance(result.get("properties"), dict):
+        properties = result.setdefault("properties", {})
+        result["required"] = sorted(properties) if isinstance(properties, dict) else []
+        result["additionalProperties"] = False
+    return result
+
+
+def _with_system_prompt(request: WorkerRequest) -> str:
+    """Prepend the agent profile's role definition to the payload.
+
+    Observed from ``codex exec --help``: there is no system-prompt flag. ``-p`` is a
+    *config* profile layered from ``$CODEX_HOME``, not an agent role, so it is not a
+    substitute. Prepending is the only mechanism available.
+    """
+    if not request.system_prompt:
+        return request.prompt
+    return f"{request.system_prompt.strip()}\n\n---\n\n{request.prompt}"
 
 
 def _classify(text: str) -> str:

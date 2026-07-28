@@ -42,6 +42,21 @@ _API_STATUS_TO_ERROR_KIND = {
 }
 
 
+def _schema_for_cli(path: Path) -> str:
+    """Turn a published contract into something ``--json-schema`` accepts.
+
+    Observed: passing a contract verbatim fails with ``no schema with key or ref
+    "https://json-schema.org/draft/2020-12/schema"`` — the CLI does not resolve the
+    dialect meta-reference. Stripping the identity keywords leaves the constraints
+    untouched, so the contract stays the single source of truth and this adapter owns
+    the provider-shaped derivation.
+    """
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    for identity_keyword in ("$schema", "$id", "title"):
+        schema.pop(identity_keyword, None)
+    return json.dumps(schema)
+
+
 class ClaudeCodeAdapter(CliWorkerAdapter):
     name = "claude_code"
 
@@ -58,6 +73,7 @@ class ClaudeCodeAdapter(CliWorkerAdapter):
     )
 
     required_flags = (
+        "--append-system-prompt",
         "--output-format",
         "--json-schema",
         "--include-partial-messages",
@@ -86,6 +102,11 @@ class ClaudeCodeAdapter(CliWorkerAdapter):
             "--include-partial-messages",
         ]
 
+        if request.system_prompt:
+            # Append rather than replace: the default system prompt carries the tool
+            # and environment description the CLI needs to function.
+            argv += ["--append-system-prompt", request.system_prompt]
+
         if request.model:
             argv += ["--model", request.model]
 
@@ -100,7 +121,7 @@ class ClaudeCodeAdapter(CliWorkerAdapter):
 
         if request.output_schema_path is not None:
             # Claude Code takes the schema as a string, not a path.
-            argv += ["--json-schema", request.output_schema_path.read_text(encoding="utf-8")]
+            argv += ["--json-schema", _schema_for_cli(request.output_schema_path)]
 
         if request.resume_from:
             argv += ["--resume", request.resume_from]
