@@ -126,6 +126,26 @@ class WorkflowDefinition(BaseModel):
 
         return tuple(ordered)
 
+    def depends_on_write_node(self, node_id: str) -> bool:
+        """Does this node transitively depend on one that writes to a worktree?
+
+        Such a node has to read the worktree, not the primary checkout, or it is
+        looking at code that predates the work it was asked about. A live run caught
+        the reviewer doing exactly that.
+        """
+        seen: set[str] = set()
+        frontier = list(self.node(node_id).depends_on)
+        while frontier:
+            current = frontier.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            node = self.node(current)
+            if node.needs_worktree:
+                return True
+            frontier.extend(node.depends_on)
+        return False
+
     def reaches_approval(self, node_id: str) -> bool:
         """Does an approval gate sit at or downstream of this node?"""
         seen: set[str] = set()

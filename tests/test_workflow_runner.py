@@ -272,6 +272,34 @@ def test_the_implementation_node_gets_its_own_worktree(harness) -> None:
     assert codex.requests[0].filesystem_access == "scoped_write"
 
 
+def test_a_read_only_node_depending_on_a_write_node_reads_the_worktree(harness) -> None:
+    """A reviewer pointed at the primary checkout reviews code that predates the work.
+
+    Caught by a live run: the reviewer globbed the untouched checkout and reported on
+    it, so the review gate was inspecting the wrong directory entirely.
+    """
+    runner, claude, codex, _ = harness
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    worktree_path = Path(record.worktree["path"])
+    review_request = claude.requests[-1]
+
+    assert review_request.workspace == worktree_path
+    # It reads the worktree; it does not get write access to it.
+    assert review_request.filesystem_access == "read_only"
+    assert "Read" in review_request.allowed_tools
+    assert not {"Write", "Edit"} & set(review_request.allowed_tools)
+    # The analysis node has no write dependency, so it stays on the primary checkout.
+    assert claude.requests[0].workspace == runner.config.repository
+
+
 def test_review_runs_in_a_fresh_session(harness) -> None:
     """session_policy: new. Review that inherits the implementer's context is not review."""
     runner, claude, codex, _ = harness
@@ -310,14 +338,28 @@ def test_each_worker_gets_its_own_model(harness) -> None:
     assert codex.requests[0].model is None
 
 
-def test_read_only_nodes_get_no_tools(harness) -> None:
-    runner, claude, _, _ = harness
+def test_read_only_nodes_can_read_but_not_write(harness) -> None:
+    """No tools at all is not read-only, it is blind.
+
+    A live run gave the reviewer an empty tool set: it returned `verdict: pass` and
+    recorded that it had nothing capable of reading the code it was reviewing.
+    """
+    runner, claude, codex, _ = harness
     claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
 
     runner.create_run("RUN-1")
     asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
 
-    assert claude.requests[0].allowed_tools == ()
+    for request in (claude.requests[0], claude.requests[-1]):
+        assert "Read" in request.allowed_tools
+        assert not {"Write", "Edit"} & set(request.allowed_tools)
+        assert request.filesystem_access == "read_only"
+
+    assert "Write" in codex.requests[0].allowed_tools
 
 
 def test_context_package_carries_prior_artifacts_not_transcripts(harness) -> None:
@@ -337,6 +379,82 @@ def test_context_package_carries_prior_artifacts_not_transcripts(harness) -> Non
     assert any("Never push to git" in c for c in package["constraints"])
     # stdout and event streams stay in the log directory.
     assert "stdout" not in codex.requests[0].prompt
+
+
+# ---------------------------------------------------------------------------
+# Agent profiles
+# ---------------------------------------------------------------------------
+
+
+def _profiles(tmp_path: Path, *names: str) -> Path:
+    root = tmp_path / "prompts"
+    for name in names:
+        (root / name).mkdir(parents=True)
+        (root / name / "system.md").write_text(f"You are {name}.", encoding="utf-8")
+    return root
+
+
+def test_each_node_gets_its_agent_profile_prompt(harness, tmp_path: Path) -> None:
+    """agent_profile was declared on every node and read by nobody."""
+    runner, claude, codex, _ = harness
+    runner.config.prompt_root = _profiles(
+        tmp_path, "task-analyst", "code-implementer", "independent-reviewer"
+    )
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+
+    assert claude.requests[0].system_prompt == "You are task-analyst."
+    assert codex.requests[0].system_prompt == "You are code-implementer."
+    assert claude.requests[-1].system_prompt == "You are independent-reviewer."
+
+
+def test_a_missing_profile_prompt_stops_the_run_before_it_starts(harness, tmp_path: Path) -> None:
+    """Running a node without its role definition is a silent quality loss."""
+    runner, _, _, _ = harness
+    runner.config.prompt_root = _profiles(tmp_path, "task-analyst")
+
+    with pytest.raises(WorkflowRunError, match="no system prompt"):
+        runner.create_run("RUN-1")
+
+
+def test_no_prompt_root_means_no_system_prompt(harness) -> None:
+    runner, claude, _, _ = harness
+    claude.queue(structured_result={"plan": []})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+
+    assert claude.requests[0].system_prompt is None
+
+
+# ---------------------------------------------------------------------------
+# Output schemas
+# ---------------------------------------------------------------------------
+
+
+def test_nodes_with_a_published_contract_get_it_as_an_output_schema(harness) -> None:
+    """Without this the review verdict is prose, and the gate cannot read it."""
+    runner, claude, codex, _ = harness
+    runner.config.contracts_root = Path(__file__).resolve().parent.parent / "contracts"
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+
+    assert codex.requests[0].output_schema_path.name == "worker-result.schema.json"
+    assert claude.requests[-1].output_schema_path.name == "review-result.schema.json"
+    # analysis.json has no published contract yet.
+    assert claude.requests[0].output_schema_path is None
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +626,58 @@ def test_an_unknown_decision_is_refused(harness) -> None:
 
     with pytest.raises(WorkflowRunError, match="unknown decision"):
         runner.decide("RUN-1", "looks fine to me")
+
+
+def test_the_approval_package_distinguishes_commits_from_dirty_files(harness) -> None:
+    """A branch name in `changes` reads as "there are commits"; a live run had none."""
+    runner, claude, codex, _ = harness
+    codex.writes = {"new_file.py": "print('work')\n"}
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    changes = record.pending_approval.changes
+    assert any("uncommitted change" in entry for entry in changes), changes
+
+
+def test_a_terminal_run_releases_its_worktree(harness) -> None:
+    """A lock left behind makes reconcile() report a finished run as live forever."""
+    runner, claude, codex, store = harness
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+    record = runner.decide("RUN-1", "approve")
+
+    assert record.task_state is TaskState.COMPLETED
+    assert "worktree_released" in _kinds(store, "RUN-1")
+    # The worktree survives - the branch is the deliverable - but is no longer locked.
+    assert runner.worktrees.reconcile().locked == ()
+    assert Path(record.worktree["path"]).is_dir()
+
+
+def test_a_cancelled_run_also_releases_its_worktree(harness) -> None:
+    runner, claude, codex, store = harness
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "reject", reason="not what I wanted")
+
+    assert runner.worktrees.reconcile().locked == ()
 
 
 def test_the_approval_package_is_written_as_an_artifact(harness) -> None:

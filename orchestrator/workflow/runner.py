@@ -25,6 +25,7 @@ Four rules are enforced here rather than trusted to a worker:
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,8 @@ from uuid import uuid4
 from execution.process_manager import ProcessManager
 from execution.verifier import VerificationCommand, VerificationRunner
 from execution.workspace_guard import WorkspaceContainment
-from execution.worktree_manager import Worktree, WorktreeManager
-from orchestrator.context_builder.builder import ContextPackageBuilder
+from execution.worktree_manager import Worktree, WorktreeError, WorktreeManager
+from orchestrator.context_builder.builder import SCHEMA_BY_ARTIFACT, ContextPackageBuilder
 from orchestrator.domain.models import ApprovalRisk, Task, TaskState
 from orchestrator.state_machine import TaskStateMachine
 from orchestrator.workflow.definition import (
@@ -79,8 +80,22 @@ class RunnerConfig:
     #: keeps Model and Worker Adapter separate; one shared field conflated them.
     #: A worker with no entry gets no --model flag and uses its own default.
     models: dict[str, str] = field(default_factory=dict)
-    #: Tools granted to a write node. Read-only nodes always get none.
+    #: Root of the agent profile prompts, one `<profile>/system.md` per profile. When
+    #: set, every worker node's profile must have a file or the run refuses to start —
+    #: a node running without its role definition is a silent quality loss, not a
+    #: warning. When unset, workers run on their CLI default persona.
+    prompt_root: Path | None = None
+    #: Root of the JSON Schema contracts. When set, a node whose deliverable has a
+    #: published contract gets it passed to the worker as an output schema, so the
+    #: artifact conforms instead of being prose the runner cannot interpret.
+    contracts_root: Path | None = None
+    #: Tools granted to a write node.
     write_tools: tuple[str, ...] = ("Read", "Write", "Edit", "Bash")
+    #: Tools granted to a read-only node. Not empty: a live run put the reviewer in the
+    #: right worktree with no tools at all, and it returned `verdict: pass` while
+    #: recording that it had been given nothing capable of reading the code. A review
+    #: of a narrative is not the independent review the MVP calls for.
+    read_tools: tuple[str, ...] = ("Read", "Glob", "Grep")
 
 
 class WorkflowRunner:
@@ -110,6 +125,7 @@ class WorkflowRunner:
     # -- lifecycle ---------------------------------------------------------------
 
     def create_run(self, run_id: str | None = None) -> RunRecord:
+        self._check_agent_profiles()
         record = RunRecord(
             run_id=run_id or f"RUN-{uuid4().hex[:12]}",
             task_id=self.task.task_id,
@@ -227,8 +243,7 @@ class WorkflowRunner:
                 f"which is not configured. Available: {sorted(self.adapters)}"
             )
 
-        worktree = self._worktree_for(record, node)
-        workspace = worktree.path if worktree is not None else self.config.repository
+        worktree, workspace = self._resolve_workspace(record, node)
         containment = self._containment_for(worktree)
 
         request = self._build_request(record, node, workspace)
@@ -377,29 +392,97 @@ class WorkflowRunner:
             prompt=_render_prompt(node, package),
             workspace=workspace,
             log_dir=self.store.log_dir(record.run_id),
-            output_schema_path=None,
+            output_schema_path=self._output_schema_for(node),
             timeout_seconds=self.config.node_timeout_seconds,
             environment={},
+            system_prompt=self._system_prompt_for(node),
             model=self.config.models.get(node.worker_requirement),
             resume_from=resume_from,
-            allowed_tools=self.config.write_tools if node.needs_worktree else (),
+            allowed_tools=(
+                self.config.write_tools if node.needs_worktree else self.config.read_tools
+            ),
             filesystem_access="scoped_write" if node.needs_worktree else "read_only",
         )
 
-    def _worktree_for(self, record: RunRecord, node: WorkflowNode) -> Worktree | None:
-        if not node.needs_worktree:
+    def _check_agent_profiles(self) -> None:
+        """Every worker node must have a role definition before anything starts."""
+        if self.config.prompt_root is None:
+            return
+        missing = sorted(
+            {
+                node.agent_profile
+                for node in self.workflow.nodes
+                if not node.is_builtin and not self._profile_path(node).is_file()
+            }
+        )
+        if missing:
+            raise WorkflowRunError(
+                f"agent profiles with no system prompt under {self.config.prompt_root}: "
+                f"{missing}"
+            )
+
+    def _output_schema_for(self, node: WorkflowNode) -> Path | None:
+        """The contract governing this node's deliverable, when one is published.
+
+        Without it a worker returns prose, and the runner cannot read a review verdict
+        out of prose — a live run completed with a review that was never inspected.
+        Deliverables with no contract yet (analysis.json, verification-result.json)
+        simply get none.
+        """
+        if self.config.contracts_root is None:
             return None
+        relative = SCHEMA_BY_ARTIFACT.get(node.expected_artifact)
+        if relative is None:
+            return None
+        path = self.config.contracts_root / Path(relative).name
+        return path if path.is_file() else None
+
+    def _profile_path(self, node: WorkflowNode) -> Path:
+        assert self.config.prompt_root is not None
+        return self.config.prompt_root / node.agent_profile / "system.md"
+
+    def _system_prompt_for(self, node: WorkflowNode) -> str | None:
+        if self.config.prompt_root is None or node.is_builtin:
+            return None
+        return self._profile_path(node).read_text(encoding="utf-8")
+
+    def _resolve_workspace(
+        self, record: RunRecord, node: WorkflowNode
+    ) -> tuple[Worktree | None, Path]:
+        """Decide which directory this node sees.
+
+        A write node gets the run's worktree. So does a read-only node that depends on
+        one: a reviewer pointed at the primary checkout reviews code that predates the
+        work it was asked about, which a live run caught happening. Everything else
+        reads the primary checkout.
+        """
+        if node.needs_worktree:
+            worktree = self._worktree_for(record, node)
+            return worktree, worktree.path
+
+        if record.worktree is not None and self.workflow.depends_on_write_node(node.id):
+            worktree = self._recorded_worktree(record)
+            return worktree, worktree.path
+
+        return None, self.config.repository
+
+    @staticmethod
+    def _recorded_worktree(record: RunRecord) -> Worktree:
+        assert record.worktree is not None
+        return Worktree(
+            run_id=record.worktree["run_id"],
+            repository=Path(record.worktree["repository"]),
+            run_dir=Path(record.worktree["run_dir"]),
+            path=Path(record.worktree["path"]),
+            branch=record.worktree["branch"],
+            base_ref=record.worktree["base_ref"],
+        )
+
+    def _worktree_for(self, record: RunRecord, node: WorkflowNode) -> Worktree:
         if record.worktree is not None:
             # A repair round reuses the worktree so the branch history and any resumed
             # session stay coherent.
-            return Worktree(
-                run_id=record.worktree["run_id"],
-                repository=Path(record.worktree["repository"]),
-                run_dir=Path(record.worktree["run_dir"]),
-                path=Path(record.worktree["path"]),
-                branch=record.worktree["branch"],
-                base_ref=record.worktree["base_ref"],
-            )
+            return self._recorded_worktree(record)
 
         worktree = self.worktrees.create(record.run_id)
         self.worktrees.lock(worktree, f"{record.run_id} in flight")
@@ -477,6 +560,62 @@ class WorkflowRunner:
             "error_kind": result.error_kind,
         }
 
+    def _describe_changes(self, record: RunRecord) -> list[str]:
+        """State what is actually on disk, not what a branch name implies.
+
+        A live run had the worker edit files without committing, while the approval
+        package listed the branch as the change — which reads as "there are commits to
+        review" when there were none.
+        """
+        if record.worktree is None:
+            return []
+
+        worktree = Path(record.worktree["path"])
+        branch = record.worktree["branch"]
+        base = record.worktree["base_ref"]
+        if not worktree.is_dir():
+            return [f"{branch}: worktree is missing"]
+
+        commits = self._git_output(worktree, "log", "--oneline", f"{base}..HEAD")
+        uncommitted = self._git_output(worktree, "status", "--porcelain")
+
+        changes: list[str] = []
+        if commits:
+            changes.extend(f"{branch}: {line}" for line in commits.splitlines())
+        if uncommitted:
+            changes.append(
+                f"{branch}: {len(uncommitted.splitlines())} uncommitted change(s) in the worktree"
+            )
+        if not changes:
+            changes.append(f"{branch}: no commits and no file changes")
+        return changes
+
+    @staticmethod
+    def _git_output(cwd: Path, *arguments: str) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(cwd), *arguments],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return completed.stdout.strip() if completed.returncode == 0 else ""
+
+    def _release_worktree(self, record: RunRecord) -> None:
+        """Unlock the worktree once the run is over.
+
+        The worktree itself is kept — the branch is the deliverable and a human needs
+        to look at it — but a lock left behind means `WorktreeManager.reconcile()`
+        reports it as belonging to a live run forever.
+        """
+        if record.worktree is None:
+            return
+        try:
+            self.worktrees.unlock(self._recorded_worktree(record))
+        except WorktreeError as exc:
+            self._event(record, "worktree_unlock_failed", detail={"reason": str(exc)})
+            return
+        self._event(record, "worktree_released", detail={"path": record.worktree["path"]})
+
     def _request_approval(
         self, record: RunRecord, node: WorkflowNode, kind: ApprovalKind
     ) -> None:
@@ -490,7 +629,7 @@ class WorkflowRunner:
             approval_type=kind.value,
             risk_level=self._risk_for(kind).value,
             summary=f"{self.workflow.workflow_id}: {kind.value} approval after {node.id}",
-            changes=[record.worktree["branch"]] if record.worktree else [],
+            changes=self._describe_changes(record),
             evidence=evidence,
             risks=[],
             requested_decision="approve",
@@ -604,6 +743,10 @@ class WorkflowRunner:
         self._event(
             record, "state_changed", detail={"from": previous.value, "to": target.value}
         )
+        # One place rather than at every terminal path, so a new way of ending a run
+        # cannot forget to let go of the worktree.
+        if record.is_terminal:
+            self._release_worktree(record)
 
     def _event(
         self,
