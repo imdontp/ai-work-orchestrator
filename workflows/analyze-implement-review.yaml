@@ -1,0 +1,38 @@
+schema_version: "1.0"
+workflow_id: analyze-implement-review
+version: "0.1.0"
+description: Initial sequential vertical slice
+max_repair_rounds: 2
+nodes:
+  - id: analyze
+    agent_profile: task-analyst
+    worker_requirement: claude_code
+    depends_on: []
+    expected_artifact: analysis.json
+    approval_after: plan
+
+  - id: implement
+    agent_profile: code-implementer
+    worker_requirement: codex
+    depends_on: [analyze]
+    expected_artifact: worker-result.json
+    workspace: isolated_worktree
+
+  - id: verify
+    agent_profile: system-verifier
+    worker_requirement: local_tool_runner
+    depends_on: [implement]
+    expected_artifact: verification-result.json
+
+  - id: review
+    agent_profile: independent-reviewer
+    worker_requirement: claude_code
+    session_policy: new
+    depends_on: [implement, verify]
+    expected_artifact: review-result.json
+
+  - id: final_approval
+    agent_profile: human-approval
+    worker_requirement: human
+    depends_on: [review]
+    expected_artifact: approval-decision.json

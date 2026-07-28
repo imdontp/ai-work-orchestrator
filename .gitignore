@@ -1,0 +1,128 @@
+# ---------------------------------------------------------------------------
+# Secrets and credentials  (NEVER commit)
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.env
+secrets/
+secrets.*
+credentials.json
+client_secret*.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+*.crt
+*.cer
+.netrc
+.npmrc
+.pypirc
+.htpasswd
+
+# Provider / CLI agent auth state (subscription tokens, session cookies)
+.claude/settings.local.json
+.claude/.credentials.json
+.codex/
+.config/
+.aws/
+.gcloud/
+.azure/
+.docker/config.json
+
+# ---------------------------------------------------------------------------
+# Untrusted / sensitive runtime output
+# Artifacts, run logs and worktrees may contain source excerpts, agent
+# transcripts, diffs and credentials captured from stdout/stderr.
+# ---------------------------------------------------------------------------
+artifacts/*
+!artifacts/.gitkeep
+runs/*
+!runs/.gitkeep
+worktrees/*
+!worktrees/.gitkeep
+sessions/
+transcripts/
+*.log
+logs/
+*.stdout.log
+*.stderr.log
+*.pid
+*.sock
+
+# Local databases / dumps
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+pgdata/
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+# Node / web dashboard
+# ---------------------------------------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+.pnpm-store/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Editors and OS (may leak local absolute paths and machine identity)
+# ---------------------------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ---------------------------------------------------------------------------
+# Local scratch
+# ---------------------------------------------------------------------------
+tmp/
+temp/
+scratch/
+*.local
+*.bak
+*.orig
+*.rej

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.ai-work-orchestrator/contracts/approval-package.schema.json",
+  "title": "Approval Package",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "approval_id",
+    "run_id",
+    "approval_type",
+    "risk_level",
+    "summary",
+    "evidence",
+    "requested_decision"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "approval_id": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "approval_type": {
+      "type": "string",
+      "enum": [
+        "plan",
+        "revision",
+        "final_result",
+        "external_side_effect"
+      ]
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "requested_decision": {
+      "type": "string",
+      "enum": [
+        "approve",
+        "request_changes",
+        "reject"
+      ]
+    },
+    "external_effect": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

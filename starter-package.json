@@ -1,0 +1,20 @@
+{
+  "package": "ai-work-orchestrator-starter",
+  "version": "0.1.0",
+  "milestone": "M0_FOUNDATION",
+  "primary_workers": [
+    "Claude Code",
+    "Codex"
+  ],
+  "deferred_workers": [
+    "OpenCode"
+  ],
+  "entry_documents": [
+    "README.md",
+    "AGENTS.md",
+    "docs/START_HERE.md",
+    "docs/MVP_SCOPE.md",
+    "docs/SYSTEM_ARCHITECTURE.md"
+  ],
+  "contract_version": "1.0"
+}
