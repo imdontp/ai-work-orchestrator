@@ -42,9 +42,16 @@ directory, that run directory carries a deny-write barrier, and the run is brack
 `WorkspaceContainment` so writes outside it fail the run. `WORKTREE_ROOT` must be
 outside the repository; the application refuses to start otherwise.
 
-`execution/worktree_manager.py` implements that layout, and the Claude Code and Codex
-adapters are implemented against the recorded argv templates. Wiring the orchestrator
-to the workflow graph is next.
+`execution/worktree_manager.py` implements that layout, the Claude Code and Codex
+adapters are implemented against the recorded argv templates, and
+`orchestrator/workflow/` drives the node graph end to end in process.
+
+Rules 5, 7, 9 and 10 are enforced in `orchestrator/workflow/runner.py` rather than
+trusted to a worker: verification commands are re-run mechanically, write nodes execute
+in a contained worktree, a run cannot reach `COMPLETED` without passing through
+`WAITING_APPROVAL`, and repair rounds are bounded by the workflow.
+
+Task intake and persistence are next.
 
 ## Allowed work in Milestone 0
 

@@ -21,17 +21,33 @@ checkout. It creates, validates, locks, cleans up and reconciles after a restart
 `workers/claude_code.py` and `workers/codex.py` are implemented against section 7 of
 the spike report, sharing process plumbing through `workers/cli_base.py`.
 
+`orchestrator/workflow/` drives the node graph: it loads and validates the DAG, runs
+each node through `TaskStateMachine`, creates a worktree for write nodes and brackets
+them with `WorkspaceContainment`, re-runs verification commands mechanically, pauses at
+approval gates, and bounds repair rounds.
+
+Two defects in the M0 foundation surfaced while wiring it up and are fixed:
+
+- `VERIFYING` had no edge to `READY`, so the shipped workflow — which puts independent
+  review after verification — could not be executed at all by the shipped state machine.
+- The `Task` model was missing `constraints`, which `contracts/task.schema.json` has.
+  `scope`, `inputs` and `metadata` are still absent.
+
 ## Recommended next action
 
-Wire the orchestrator: drive `workflows/analyze-implement-review.yaml` through the
-state machine, creating a worktree per write node, bracketing each write-capable run
-with `WorkspaceContainment`, and re-running verification commands mechanically rather
-than trusting `verification.claimed_passed`.
+Task intake and persistence. The runner is storage-agnostic behind `RunStore`, which is
+currently filesystem-backed; `docs/SYSTEM_ARCHITECTURE.md` targets PostgreSQL. Then the
+HTTP surface: submit a task, list runs, fetch the approval package, post a decision.
 
 Keep `workers/opencode.py` a placeholder.
 
 Re-run `make test-live` after any CLI upgrade — it is what re-establishes that the
 recorded argv templates still hold.
+
+Not yet done, and worth naming rather than discovering later: `analysis.json` and
+`verification-result.json` have no published contract, the agent profile prompts in
+`prompts/` are not yet applied by the adapters, and no run has been driven end to end
+against the real CLIs.
 
 Do not begin the web dashboard yet.
 

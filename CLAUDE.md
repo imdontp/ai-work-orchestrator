@@ -39,7 +39,9 @@ orchestrator/     Deterministic decision layer — no provider knowledge
   state_machine/  TaskStateMachine — explicit allowed-transition table, raises InvalidTransition
   policies/       PermissionPolicy — action + TaskPermissions -> PolicyDecision (allow/approval/risk)
   routing/        StaticRoutingPolicy — picks ExecutionMode from task shape
-  context_builder/ ContextPackage — the curated handoff payload between workers
+  context_builder/ ContextPackage + ContextPackageBuilder — the curated handoff payload
+  workflow/       definition (DAG load + validation), store (run record, artifacts,
+                  append-only event log), runner (executes the graph)
 workers/          WorkerAdapter ABC (health_check/start/stream_events/cancel/collect),
                   CliWorkerAdapter (shared process plumbing), ClaudeCodeAdapter, CodexAdapter
 execution/        ProcessManager (argv-only subprocess, no shell), VerificationRunner,
@@ -70,7 +72,9 @@ The M1 capability spike is complete and both of its blockers are closed. `execut
 
 Verified argv templates for Claude Code and Codex are in `docs/spikes/M1_CLI_CAPABILITY_REPORT.md` section 7. They were executed on this machine and their output recorded. Treat them as **unverified again after any CLI upgrade** and re-run `scripts/spike_m1.py` — the first Codex suite failed 12/15 probes because `-a/--ask-for-approval` exists on `codex` but not on `codex exec`. Documentation is not evidence; only a recorded local run is.
 
-Write-capable runs must go through `WorktreeManager.create()` and be bracketed by `WorkspaceContainment` with `worktree.git_allowances`. See ADR-010 — no worker sandbox flag is trusted for containment.
+Write-capable runs must go through `WorktreeManager.create()` and be bracketed by `WorkspaceContainment` with `worktree.git_allowances`. See ADR-010 — no worker sandbox flag is trusted for containment. `WorkflowRunner` already does this; anything driving a worker outside the runner must do it too.
+
+The task states describe the run's *phase*, not each node. Consecutive nodes of the same kind need no transition; where the table has no direct edge, `READY` is the neutral state a run passes back through. Never add a `_transition` call that bypasses `TaskStateMachine`.
 
 Adapter rules:
 
