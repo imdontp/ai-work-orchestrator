@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +20,10 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
     database_url: str = "postgresql+psycopg://orchestrator:orchestrator@localhost:5432/orchestrator"
+    #: "filesystem" or "postgres". Filesystem is the default because it needs nothing
+    #: running; postgres is what docs/SYSTEM_ARCHITECTURE.md targets. Artifact payloads
+    #: and worker logs stay on disk either way.
+    run_store_backend: Literal["filesystem", "postgres"] = "filesystem"
     artifact_root: Path = Path("./artifacts")
     run_root: Path = Path("./runs")
     worktree_root: Path = DEFAULT_WORKTREE_ROOT

@@ -15,6 +15,10 @@ dependencies = [
   # Workflow graphs are YAML. Previously present only as a transitive dependency of
   # uvicorn[standard], which is not something to rely on for a direct import.
   "pyyaml>=6.0,<7.0",
+  # Run records, the audit trail and artifact metadata, per docs/SYSTEM_ARCHITECTURE.md.
+  # Used directly rather than through an ORM: three tables, and the record itself is
+  # already a versioned pydantic model stored as JSONB.
+  "psycopg[binary]>=3.1,<4.0",
   "uvicorn[standard]>=0.30,<1.0",
 ]
 

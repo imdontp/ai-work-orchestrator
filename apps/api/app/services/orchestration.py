@@ -24,7 +24,22 @@ from orchestrator.workflow import (
     WorkflowRunner,
     load_workflow,
 )
+from orchestrator.workflow.store import FilesystemRunStore
 from workers import ADAPTERS_BY_NAME
+
+
+def _build_store(settings: Settings) -> RunStore:
+    """Pick the storage backend. Failing to reach Postgres is not silently downgraded.
+
+    Falling back to the filesystem when the database is unreachable would mean runs
+    quietly landing somewhere other than where an operator configured them, and only
+    being noticed when someone went looking for a record that was never written.
+    """
+    if settings.run_store_backend == "postgres":
+        from orchestrator.workflow.postgres_store import PostgresRunStore
+
+        return PostgresRunStore(settings.database_url, settings.run_root)
+    return FilesystemRunStore(settings.run_root)
 
 
 class OrchestrationError(RuntimeError):
@@ -38,7 +53,7 @@ class NotConfigured(OrchestrationError):
 class OrchestrationService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
-        self.store = RunStore(self.settings.run_root)
+        self.store = _build_store(self.settings)
         self._workflow: WorkflowDefinition | None = None
         #: One lock per run. A run advancing twice at once would have two workers in
         #: the same worktree and two writers to the same record.

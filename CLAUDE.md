@@ -18,6 +18,14 @@ make run            # uvicorn apps.api.app.main:app --reload
 make postgres-up    # docker compose up -d postgres
 ```
 
+`tests/test_run_store.py` runs one contract suite against both storage backends. The
+Postgres parametrization skips when no database is reachable, so a green suite without
+`make postgres-up` has only proven the filesystem half:
+
+```bash
+make postgres-up && pytest tests/test_run_store.py -v   # both backends
+```
+
 Single test: `pytest tests/test_state_machine.py::test_name`. Use `-q` off with `pytest -o addopts=""` when you need full output.
 
 Endpoints once running: `http://127.0.0.1:8000/health`, `/docs`, `/api/v1/system/capabilities`.
@@ -33,15 +41,16 @@ The target machine is native Windows with **no WSL distribution installed**, so 
 The system is a **deterministic control plane** driving **LLM CLI workers**. The split is the core design constraint: application code owns state, permissions, timeouts, retries, and approval gates; agents only supply judgment and implementation.
 
 ```
-apps/api          FastAPI control plane (health, system capabilities)
+apps/api          FastAPI control plane — health, capabilities, task intake, run control
+  services/       OrchestrationService: builds runners, supervises background advances
 orchestrator/     Deterministic decision layer — no provider knowledge
   domain/         Task, TaskState, TaskPermissions, ExecutionMode, ApprovalRisk (pydantic)
   state_machine/  TaskStateMachine — explicit allowed-transition table, raises InvalidTransition
   policies/       PermissionPolicy — action + TaskPermissions -> PolicyDecision (allow/approval/risk)
   routing/        StaticRoutingPolicy — picks ExecutionMode from task shape
   context_builder/ ContextPackage + ContextPackageBuilder — the curated handoff payload
-  workflow/       definition (DAG load + validation), store (run record, artifacts,
-                  append-only event log), runner (executes the graph)
+  workflow/       definition (DAG load + validation), store (RunStore contract +
+                  FilesystemRunStore), postgres_store (PostgresRunStore), runner
 workers/          WorkerAdapter ABC (health_check/start/stream_events/cancel/collect),
                   CliWorkerAdapter (shared process plumbing), ClaudeCodeAdapter, CodexAdapter
 execution/        ProcessManager (argv-only subprocess, no shell), VerificationRunner,
