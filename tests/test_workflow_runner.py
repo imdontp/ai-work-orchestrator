@@ -376,9 +376,42 @@ def test_context_package_carries_prior_artifacts_not_transcripts(harness) -> Non
     package = json.loads(codex.requests[0].prompt)
     assert package["objective"] == "Add a multiply function"
     assert any("step one" in artifact for artifact in package["prior_artifacts"])
-    assert any("Never push to git" in c for c in package["constraints"])
+    assert any("Never push to git" in rule for rule in package["node_rules"])
     # stdout and event streams stay in the log directory.
     assert "stdout" not in codex.requests[0].prompt
+
+
+def test_node_rules_are_separate_from_the_tasks_own_constraints(harness) -> None:
+    """Merging them made a reviewer report the task as self-contradictory.
+
+    It read "This node is read-only: do not modify any file" in the same list as the
+    task's constraints, next to an objective asking for a new function, and filed a
+    finding about the contradiction.
+    """
+    runner, claude, codex, _ = harness
+    runner.task = runner.task.model_copy(
+        update={"constraints": ["Keep the existing add() function unchanged."]}
+    )
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+
+    review_package = json.loads(claude.requests[-1].prompt)
+    write_package = json.loads(codex.requests[0].prompt)
+
+    # The task's own constraint reaches every node, unchanged and unpadded.
+    assert review_package["constraints"] == ["Keep the existing add() function unchanged."]
+    assert write_package["constraints"] == ["Keep the existing add() function unchanged."]
+
+    # Per-node rules differ by node and never leak into `constraints`.
+    assert any("read-only" in rule for rule in review_package["node_rules"])
+    assert any("Write only inside" in rule for rule in write_package["node_rules"])
+    assert not any("read-only" in c for c in review_package["constraints"])
 
 
 # ---------------------------------------------------------------------------
