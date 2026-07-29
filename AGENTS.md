@@ -52,7 +52,8 @@ adapters are implemented against the recorded argv templates, and
 Rules 5, 7, 9 and 10 are enforced in `orchestrator/workflow/runner.py` rather than
 trusted to a worker: verification commands are re-run mechanically, write nodes execute
 in a contained worktree, a run cannot reach `COMPLETED` without passing through
-`WAITING_APPROVAL`, and repair rounds are bounded by the workflow.
+`WAITING_APPROVAL`, and repair rounds are bounded by the workflow. Rules 5, 7 and 9 now
+have live evidence as well as tests — see the end-to-end run below.
 
 Task intake and persistence are done: `RunStore` has a filesystem and a PostgreSQL
 backend behind one contract, and `apps/api/app/routers/runs.py` submits a task, lists
@@ -60,9 +61,18 @@ and fetches runs, advances them, streams events, serves the approval package and
 artifacts, and records a decision. The API is unauthenticated by design for a
 single-user local control plane; the reasoning is in `docs/SECURITY_POLICY.md`.
 
-Next is a run driven end to end against the real Claude Code and Codex CLIs. Every
-stage has unit coverage; none of it has been observed working together against live
-workers, and that is the last item in the MVP definition of done.
+One run has been driven end to end against the real Claude Code and Codex CLIs —
+intake, analysis, plan approval, implementation in a worktree, mechanical verification,
+independent review, final approval — which closes the last item in the MVP definition of
+done. It found three defects that the tests did not: worker-guessed identity fields in
+artifacts, an approval package that counted changes instead of naming them, and a
+record rename that a Windows file lock could fail. All three are fixed.
+
+That run exercised the happy path only. The repair loop, a failing verification, a
+review asking for changes, a containment violation, a timeout and a cancellation have
+unit coverage and no live evidence. Driving those is next, against a real project
+rather than the throwaway repository the first run used.
+`docs/START_HERE.md` records what the run established and what it did not.
 
 ## Allowed work
 

@@ -2,10 +2,10 @@
 
 ## Current status
 
-Milestone 0 foundation and the Milestone 1 CLI capability spike are complete, and the
-Milestone 2 execution slice is merged. Every stage of the MVP pipeline exists in code
-and is covered by tests; what has not happened is a single run driven end to end against
-the real CLIs.
+Milestone 0 foundation and the Milestone 1 CLI capability spike are complete, the
+Milestone 2 execution slice is merged, and **one run has been driven end to end against
+the real Claude Code and Codex CLIs**. That was the last open item in the MVP definition
+of done. See "The first end-to-end run" below for what it proved and what it did not.
 
 The spike found two blockers. Both are closed:
 
@@ -50,14 +50,53 @@ Four defects surfaced while wiring this up and are fixed:
 - The `Task` model was missing `constraints`, `scope`, `inputs` and `metadata`, all of
   which `contracts/task.schema.json` has. It now carries the full set.
 
+## The first end-to-end run
+
+A task was submitted over the HTTP API and carried through the shipped workflow against
+the real CLIs: analyze (Claude Code) → plan approval → implement (Codex, in a worktree)
+→ verify → review (Claude Code, fresh session) → final approval → `COMPLETED`. The
+target was a throwaway repository holding a failing test suite and no implementation,
+so the run had real work to do and a red baseline to turn green.
+
+What it established, from the run's own record rather than from the code:
+
+- Every state change went through `TaskStateMachine`, including the `VERIFYING → READY`
+  edge that a shipped workflow needs and that the shipped state machine once lacked.
+- The worker claimed `verification.claimed_passed: true`; `VerificationRunner` re-ran
+  the command itself and agreed. The two are separately recorded, so a disagreement
+  would have been visible.
+- Both write-capable nodes logged `containment_armed` with the deny barrier, and the
+  primary checkout was untouched afterwards — the produced file existed only in the
+  worktree.
+- The run could not reach `COMPLETED` without a human decision at both gates.
+- The analysis node, which is read-only, said so in its own risk list rather than
+  writing the file it had planned.
+
+Three defects surfaced that no unit test had caught, all now fixed:
+
+- Identity fields in worker artifacts were the worker's guess. Codex reported
+  `"worker": "/root"`. The runner now stamps `worker`, `task_id` and `run_id`.
+- The approval package counted dirty files instead of naming them, so a human at the
+  high-risk gate read "3 uncommitted change(s)" for one source file and two caches.
+- `FilesystemRunStore.save` could fail on a transient Windows file lock, which would
+  mark a healthy run failed. The rename now retries.
+
+What the run did **not** exercise: the repair loop, a verification failure, a review
+returning `request_changes`, a containment violation, a timeout, or a cancellation.
+Each of those has unit coverage and none has live evidence. The run also used a toy
+target repository, not a real project.
+
+The run's artifacts and logs were deleted during cleanup, so this section — and the
+three commits above — are what remains of it. Re-running the pipeline regenerates the
+evidence; it does not restore that run.
+
 ## Recommended next action
 
-Drive one run end to end against the real Claude Code and Codex CLIs: task intake,
-analysis, plan approval, implementation in a worktree, mechanical verification,
-independent review, final approval. Every part of that path has unit coverage and none
-of it has been observed working together against live workers. That run is the last
-item in the MVP definition of done, and it is where the assembled seams will fail if
-they are going to.
+Drive the paths the first run skipped, against a real project rather than a toy one:
+a verification that genuinely fails, a review that asks for changes, and a repair round
+that reaches the bound. The happy path is now evidenced; the failure paths are still
+only asserted in tests, and they are the ones that decide whether the system is safe to
+leave running.
 
 Keep `workers/opencode.py` a placeholder.
 
@@ -70,10 +109,14 @@ Do not begin the web dashboard yet (ADR-009).
 
 Named here rather than discovered later:
 
-- No run has been driven end to end against the real CLIs.
+- No live evidence for the repair loop, verification failure, review-requested changes,
+  containment violation, timeout or cancellation. See the section above.
 - The API is unauthenticated. This is deliberate for a single-user local control plane
   and the reasoning is recorded in `docs/SECURITY_POLICY.md`; it is not a gap that has
   been overlooked, and it is a gap that must close before the API leaves localhost.
+- `RunStore.append_event` opens the events file in append mode and carries the same
+  transient-lock exposure on Windows that `save` was hardened against. It has never
+  been observed failing, so it has been left alone rather than hardened on a guess.
 - `workers/opencode.py` is a docstring-only placeholder, and parallel execution is
   designed for but deferred. Both are MVP scope decisions, not omissions.
 
