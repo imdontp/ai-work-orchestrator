@@ -303,6 +303,50 @@ def test_rejecting_cancels_the_run(client) -> None:
     assert payload["failure"] == "wrong shape"
 
 
+def test_a_paused_run_can_be_cancelled_over_the_api(client) -> None:
+    """Rejecting an approval was the only way to stop a run; it needed its own verb."""
+    test_client, _ = client
+    run_id = _submit(test_client).json()["run_id"]
+    _wait_for_pause(test_client, run_id)
+
+    payload = test_client.post(
+        f"/api/v1/runs/{run_id}/cancel", json={"reason": "no longer needed"}
+    ).json()
+
+    assert payload["task_state"] == "CANCELLED"
+    assert payload["failure"] == "no longer needed"
+    assert payload["pending_approval"] is None
+
+
+def test_cancelling_without_a_body_is_allowed(client) -> None:
+    test_client, _ = client
+    run_id = _submit(test_client).json()["run_id"]
+    _wait_for_pause(test_client, run_id)
+
+    response = test_client.post(f"/api/v1/runs/{run_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["task_state"] == "CANCELLED"
+
+
+def test_cancelling_a_finished_run_is_refused(client) -> None:
+    test_client, _ = client
+    run_id = _submit(test_client).json()["run_id"]
+    _wait_for_pause(test_client, run_id)
+    test_client.post(f"/api/v1/runs/{run_id}/cancel")
+
+    response = test_client.post(f"/api/v1/runs/{run_id}/cancel")
+
+    assert response.status_code == 409
+    assert "CANCELLED" in response.json()["detail"]
+
+
+def test_cancelling_an_unknown_run_is_a_404(client) -> None:
+    test_client, _ = client
+
+    assert test_client.post("/api/v1/runs/RUN-nope/cancel").status_code == 404
+
+
 def test_an_unknown_decision_is_refused(client) -> None:
     test_client, _ = client
     run_id = _submit(test_client).json()["run_id"]

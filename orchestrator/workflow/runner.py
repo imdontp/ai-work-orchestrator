@@ -51,7 +51,7 @@ from orchestrator.workflow.store import (
     RunRecord,
     RunStore,
 )
-from workers.base import WorkerAdapter, WorkerRequest, WorkerResult
+from workers.base import WorkerAdapter, WorkerHandle, WorkerRequest, WorkerResult
 from workers.cli_base import extract_json
 
 #: Dirty paths named individually in an approval package before the rest are summarised.
@@ -130,6 +130,11 @@ class WorkflowRunner:
         self.context_builder = context_builder or ContextPackageBuilder()
         #: Identity fields per contract file, so a schema is read once per run.
         self._identity_fields: dict[Path, frozenset[str]] = {}
+        #: The worker currently running, so a cancel arriving on another task can reach
+        #: it. None between nodes.
+        self._active: tuple[WorkerAdapter, WorkerHandle] | None = None
+        self._cancelling = False
+        self._cancel_reason = ""
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -159,6 +164,9 @@ class WorkflowRunner:
             self._transition(record, TaskState.READY)
 
         while True:
+            if self._cancelling:
+                return self._cancel_now(record)
+
             node = self._next_node(record)
             if node is None:
                 return self._finish(record)
@@ -170,8 +178,16 @@ class WorkflowRunner:
             try:
                 outcome = await self._execute_node(record, node)
             except Exception as exc:  # noqa: BLE001 - recorded, then surfaced as state
+                if self._cancelling:
+                    return self._cancel_now(record)
                 self._fail(record, node, f"{type(exc).__name__}: {exc}")
                 return record
+
+            # Before the failure branch: a cancelled worker exits non-zero, and a
+            # cancelled run must end rather than spend a repair round retrying the
+            # node the operator just stopped.
+            if self._cancelling:
+                return self._cancel_now(record)
 
             if outcome.failed:
                 if self._can_repair(record):
@@ -196,6 +212,44 @@ class WorkflowRunner:
                 return record
 
         # unreachable
+
+    async def request_cancel(self, *, reason: str = "") -> None:
+        """Stop this run, killing the worker if one is mid-flight.
+
+        Called from a different task than the one inside :meth:`advance`, so the flag is
+        set before the kill: a worker that happens to finish on its own in between still
+        ends the run instead of carrying on into the next node.
+
+        Killing the process is the point. Without it a cancel would only take effect
+        when the current node finished, which for a CLI worker is up to
+        ``node_timeout_seconds`` away — thirty minutes by default.
+        """
+        self._cancelling = True
+        self._cancel_reason = reason or "cancelled by request"
+        active = self._active
+        if active is None:
+            return
+        adapter, handle = active
+        await adapter.cancel(handle)
+
+    def cancel(self, run_id: str, *, reason: str = "") -> RunRecord:
+        """Cancel a run that is not currently advancing."""
+        record = self.store.load(run_id)
+        if record.is_terminal:
+            raise WorkflowRunError(
+                f"run {run_id} has finished as {record.task_state.value}"
+            )
+        self._cancel_reason = reason or "cancelled by request"
+        return self._cancel_now(record)
+
+    def _cancel_now(self, record: RunRecord) -> RunRecord:
+        if record.is_terminal:
+            return record
+        record.pending_approval = None
+        record.failure = self._cancel_reason or "cancelled by request"
+        self._transition(record, TaskState.CANCELLED)
+        self.store.save(record)
+        return record
 
     def decide(self, run_id: str, decision: str, *, reason: str = "") -> RunRecord:
         """Record a human decision on the pending approval.
@@ -270,11 +324,13 @@ class WorkflowRunner:
             )
         try:
             handle = await adapter.start(request)
+            self._active = (adapter, handle)
             self._event(
                 record, "worker_started", node_id=node.id, detail={"pid": handle.process_id}
             )
             result = await adapter.collect(handle)
         finally:
+            self._active = None
             report = containment.disarm() if containment is not None else None
 
         if report is not None and not report.contained:

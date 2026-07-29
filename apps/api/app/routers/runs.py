@@ -19,6 +19,7 @@ from apps.api.app.services.orchestration import (
     get_service,
 )
 from orchestrator.domain.models import Task, TaskState
+from orchestrator.workflow.runner import WorkflowRunError
 from orchestrator.workflow.store import RunRecord, RunStoreError
 
 router = APIRouter(tags=["runs"])
@@ -84,6 +85,10 @@ class SubmitTaskRequest(BaseModel):
 
 class DecisionRequest(BaseModel):
     decision: Literal["approve", "request_changes", "reject"]
+    reason: str = Field(default="", max_length=4000)
+
+
+class CancelRequest(BaseModel):
     reason: str = Field(default="", max_length=4000)
 
 
@@ -153,6 +158,27 @@ async def advance_run(
         )
     if not service.start_advance(run_id):
         raise HTTPException(status.HTTP_409_CONFLICT, f"run {run_id} is already advancing")
+    return _detail(service, record)
+
+
+@router.post("/runs/{run_id}/cancel", response_model=RunDetail)
+async def cancel_run(
+    run_id: str,
+    request: CancelRequest | None = None,
+    service: OrchestrationService = Depends(get_service),
+) -> RunDetail:
+    """Stop a run. Kills the worker if one is running, rather than waiting it out.
+
+    A run that was advancing settles to CANCELLED on its own task, so the returned
+    record may still read RUNNING. Poll GET /runs/{run_id} for the final state.
+    """
+    _load(service, run_id)
+    try:
+        record = await service.cancel(run_id, (request.reason if request else "") or "")
+    except OrchestrationError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except WorkflowRunError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return _detail(service, record)
 
 

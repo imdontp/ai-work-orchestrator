@@ -60,6 +60,10 @@ class OrchestrationService:
         self._locks: dict[str, asyncio.Lock] = {}
         self._advancing: set[str] = set()
         self._tasks: set[asyncio.Task[None]] = set()
+        #: The runner driving each advancing run. A cancel arrives on a different
+        #: request than the advance it has to interrupt, and only the runner that
+        #: started the worker holds the handle needed to kill it.
+        self._runners: dict[str, WorkflowRunner] = {}
 
     # -- configuration -----------------------------------------------------------
 
@@ -143,10 +147,13 @@ class OrchestrationService:
         try:
             async with lock:
                 record = self.store.load(run_id)
-                await self.runner_for_run(record).advance(run_id)
+                runner = self.runner_for_run(record)
+                self._runners[run_id] = runner
+                await runner.advance(run_id)
         except Exception as exc:  # noqa: BLE001 - recorded on the run, not raised at nobody
             self._record_service_failure(run_id, exc)
         finally:
+            self._runners.pop(run_id, None)
             self._advancing.discard(run_id)
 
     def _record_service_failure(self, run_id: str, exc: Exception) -> None:
@@ -163,6 +170,30 @@ class OrchestrationService:
             return
         record.failure = f"{type(exc).__name__}: {exc}"
         self.store.save(record)
+
+    async def cancel(self, run_id: str, reason: str) -> RunRecord:
+        """Stop a run, whether it is mid-worker or paused.
+
+        An advancing run is interrupted through the runner that owns the live worker,
+        so the process is killed rather than left to run out its node timeout. The
+        record settles to CANCELLED on the advance task, so the caller polls for it —
+        the same shape as starting a run.
+
+        A run that is not advancing is cancelled here and now, because nothing else is
+        going to touch it.
+        """
+        record = self.store.load(run_id)
+        if record.is_terminal:
+            raise OrchestrationError(
+                f"run {run_id} has finished as {record.task_state.value}"
+            )
+
+        runner = self._runners.get(run_id)
+        if runner is not None:
+            await runner.request_cancel(reason=reason)
+            return self.store.load(run_id)
+
+        return self.runner_for_run(record).cancel(run_id, reason=reason)
 
     def decide(self, run_id: str, decision: str, reason: str) -> RunRecord:
         if run_id in self._advancing:

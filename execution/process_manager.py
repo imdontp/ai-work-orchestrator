@@ -53,6 +53,11 @@ class ProcessHandle:
         self.stderr_path = stderr_path
         self.cancelled = False
         self.termination: str | None = None
+        #: Set by :meth:`ProcessManager.cancel` once it has recorded how it killed the
+        #: process. Created before the kill starts, so a concurrent :meth:`wait` — which
+        #: the dying process wakes — can tell "no cancel is in flight" from "a cancel is
+        #: in flight and has not written its answer yet".
+        self.cancel_finished: asyncio.Event | None = None
 
     @property
     def pid(self) -> int:
@@ -166,6 +171,14 @@ class ProcessManager:
         finally:
             handle._close_files()
 
+        # A cancel kills the process, and the death of the process is what wakes the
+        # await above — inside the kill, before it has recorded how it did it. Reading
+        # `termination` now would snapshot a None that is about to be filled in. A live
+        # run cancelled mid-worker recorded `termination: null` for a process that had
+        # in fact been killed by taskkill.
+        if handle.cancel_finished is not None:
+            await handle.cancel_finished.wait()
+
         exit_code = handle.returncode
         return ProcessResult(
             exit_code if exit_code is not None else -1,
@@ -180,14 +193,23 @@ class ProcessManager:
         """Stop a running process on request rather than on its deadline.
 
         Safe to call on a process that has already exited. The concurrent
-        :meth:`wait` returns normally with ``cancelled`` set.
+        :meth:`wait` returns normally with ``cancelled`` set, and waits for the
+        termination recorded here rather than racing it.
         """
+        # Both assignments happen before the first await, so a concurrent `wait` either
+        # sees no cancel at all or sees one it can wait for. There is no window where
+        # `cancelled` is set but the event is missing.
         handle.cancelled = True
-        if not handle.running:
-            handle.termination = handle.termination or "already_exited"
+        finished = handle.cancel_finished or asyncio.Event()
+        handle.cancel_finished = finished
+        try:
+            if not handle.running:
+                handle.termination = handle.termination or "already_exited"
+                return handle.termination
+            handle.termination = await self._terminate_process_tree(handle._process)
             return handle.termination
-        handle.termination = await self._terminate_process_tree(handle._process)
-        return handle.termination
+        finally:
+            finished.set()
 
     @staticmethod
     def _spawn_kwargs() -> dict[str, Any]:

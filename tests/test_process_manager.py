@@ -268,6 +268,34 @@ def test_cancel_marks_the_result_and_is_not_a_timeout(tmp_path: Path) -> None:
     assert result.termination is not None
 
 
+def test_cancel_records_how_it_killed_even_with_wait_already_running(tmp_path: Path) -> None:
+    """The shape a real run has: `wait` is its own task, and the kill is what wakes it.
+
+    Cancelling then waiting, as the test above does, cannot catch this. A live run
+    cancelled mid-worker recorded `termination: null` for a process taskkill had killed,
+    because `wait` woke inside the kill and read the field before it was written.
+    """
+
+    async def scenario() -> ProcessResult:
+        manager = ProcessManager()
+        handle = await manager.start(
+            args=[sys.executable, "-c", "import time; time.sleep(120)"],
+            cwd=tmp_path,
+            stdout_path=tmp_path / "out",
+            stderr_path=tmp_path / "err",
+        )
+        waiting = asyncio.create_task(manager.wait(handle, timeout_seconds=30))
+        await asyncio.sleep(0)  # let wait() reach its await on the process
+        await manager.cancel(handle)
+        return await waiting
+
+    result = _run(scenario())
+
+    assert result.cancelled is True
+    assert result.timed_out is False
+    assert result.termination is not None, "the kill mechanism was lost to a race"
+
+
 def test_cancel_is_safe_on_an_already_finished_process(tmp_path: Path) -> None:
     async def scenario() -> ProcessResult:
         manager = ProcessManager()

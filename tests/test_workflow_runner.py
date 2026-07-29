@@ -105,6 +105,9 @@ class FakeAdapter(WorkerAdapter):
         #: Written into the workspace before returning, to simulate real work.
         self.writes: dict[str, str] = {}
         self.escape_write: Path | None = None
+        #: When set, collect() blocks on it, so a test can cancel mid-worker.
+        self.hold: asyncio.Event | None = None
+        self.cancelled: list[WorkerHandle] = []
 
     def queue(self, **payload) -> None:
         self.outcomes.append(payload)
@@ -131,9 +134,15 @@ class FakeAdapter(WorkerAdapter):
         return _empty()
 
     async def cancel(self, handle: WorkerHandle) -> None:
-        return None
+        self.cancelled.append(handle)
+        if self.hold is not None:
+            # A real adapter kills the process, which unblocks the collect() waiting
+            # on it. Releasing the event is this fake's equivalent.
+            self.hold.set()
 
     async def collect(self, handle: WorkerHandle) -> WorkerResult:
+        if self.hold is not None:
+            await self.hold.wait()
         payload = self.outcomes.pop(0) if self.outcomes else {"structured_result": {"ok": True}}
         outcome_path = self.log_dir / f"{handle.worker_run_id}.outcome.json"
         outcome_path.parent.mkdir(parents=True, exist_ok=True)
@@ -827,6 +836,107 @@ def test_a_review_verdict_still_names_the_review(harness) -> None:
     record = asyncio.run(runner.advance("RUN-1"))
 
     assert "review returned request_changes" in (record.failure or "")
+
+
+# ---------------------------------------------------------------------------
+# Cancellation
+# ---------------------------------------------------------------------------
+
+
+async def _wait_for(predicate, timeout: float = 2.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not predicate():
+        if loop.time() > deadline:
+            raise AssertionError("condition was never reached")
+        await asyncio.sleep(0.01)
+
+
+def test_cancelling_reaches_the_worker_that_is_running(harness) -> None:
+    """Without killing the process a cancel would only land when the node ended."""
+    runner, claude, _, store = harness
+    claude.hold = asyncio.Event()
+    claude.queue(structured_result={"plan": []})
+
+    async def scenario():
+        runner.create_run("RUN-1")
+        advancing = asyncio.create_task(runner.advance("RUN-1"))
+        await _wait_for(lambda: len(claude.requests) == 1)
+        await runner.request_cancel(reason="operator stopped it")
+        return await advancing
+
+    record = asyncio.run(scenario())
+
+    assert record.task_state is TaskState.CANCELLED
+    assert record.failure == "operator stopped it"
+    assert claude.cancelled, "the running worker was never cancelled"
+
+
+def test_a_cancelled_node_does_not_spend_a_repair_round(harness) -> None:
+    """A cancelled worker exits non-zero, which looks like a failure worth retrying."""
+    runner, claude, _, store = harness
+    claude.hold = asyncio.Event()
+    claude.queue(exit_code=1, reported_error=True, error_kind="cancelled")
+
+    async def scenario():
+        runner.create_run("RUN-1")
+        advancing = asyncio.create_task(runner.advance("RUN-1"))
+        await _wait_for(lambda: len(claude.requests) == 1)
+        await runner.request_cancel()
+        return await advancing
+
+    record = asyncio.run(scenario())
+
+    assert record.task_state is TaskState.CANCELLED
+    assert record.repair_rounds == 0
+    assert "repair_started" not in _kinds(store, "RUN-1")
+    # One attempt, not a retry of the node the operator just stopped.
+    assert len(claude.requests) == 1
+
+
+def test_cancelling_a_paused_run_needs_no_worker(harness) -> None:
+    runner, claude, _, store = harness
+    claude.queue(structured_result={"plan": []})
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+
+    record = runner.cancel("RUN-1", reason="not worth continuing")
+
+    assert record.task_state is TaskState.CANCELLED
+    assert record.failure == "not worth continuing"
+    assert record.pending_approval is None
+
+
+def test_cancelling_a_finished_run_is_refused(harness) -> None:
+    runner, claude, _, _ = harness
+    claude.queue(structured_result={"plan": []})
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.cancel("RUN-1")
+
+    with pytest.raises(WorkflowRunError, match="has finished as CANCELLED"):
+        runner.cancel("RUN-1")
+
+
+def test_cancelling_mid_worker_releases_the_worktree(harness) -> None:
+    """The implement node holds a locked worktree; a cancel must not strand it."""
+    runner, claude, codex, store = harness
+    codex.hold = asyncio.Event()
+    claude.queue(structured_result={"plan": []})
+
+    async def scenario():
+        runner.create_run("RUN-1")
+        await runner.advance("RUN-1")
+        runner.decide("RUN-1", "approve")
+        advancing = asyncio.create_task(runner.advance("RUN-1"))
+        await _wait_for(lambda: len(codex.requests) == 1)
+        await runner.request_cancel()
+        return await advancing
+
+    record = asyncio.run(scenario())
+
+    assert record.task_state is TaskState.CANCELLED
+    assert "worktree_released" in _kinds(store, "RUN-1")
 
 
 # ---------------------------------------------------------------------------
