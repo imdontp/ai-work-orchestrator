@@ -23,7 +23,9 @@ from orchestrator.workflow.definition import WorkflowDefinition, WorkflowNode
 #: Deliverable name -> the contract that governs it. Artifacts with no entry are still
 #: produced and forwarded; they simply have no published schema yet.
 SCHEMA_BY_ARTIFACT = {
+    "analysis.json": "contracts/analysis-result.schema.json",
     "worker-result.json": "contracts/worker-result.schema.json",
+    "verification-result.json": "contracts/verification-result.schema.json",
     "review-result.json": "contracts/review-result.schema.json",
     "approval-decision.json": "contracts/approval-package.schema.json",
 }

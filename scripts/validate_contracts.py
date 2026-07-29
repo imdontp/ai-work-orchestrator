@@ -4,7 +4,9 @@ from pathlib import Path
 CONTRACT_ROOT = Path(__file__).resolve().parents[1] / "contracts"
 REQUIRED_FILES = {
     "task.schema.json",
+    "analysis-result.schema.json",
     "worker-result.schema.json",
+    "verification-result.schema.json",
     "review-result.schema.json",
     "approval-package.schema.json",
 }
