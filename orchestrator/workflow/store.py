@@ -66,8 +66,14 @@ class RunRecord(BaseModel):
 
     run_id: str
     task_id: str
+    #: The task contract this run was created from. Stored rather than referenced so a
+    #: later process can rebuild the runner from the record alone - without it, "a run
+    #: outlives the process that started it" only held for a caller that still had the
+    #: Task object in hand.
+    task: dict[str, Any] = Field(default_factory=dict)
     workflow_id: str
     workflow_version: str
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     task_state: TaskState = TaskState.PENDING
     completed_nodes: list[str] = Field(default_factory=list)
     #: Node id -> artifact filename, for the context builder.
@@ -119,6 +125,25 @@ class RunStore:
         self.log_dir(record.run_id).mkdir(parents=True)
         self.save(record)
         return record
+
+    def list_runs(self) -> tuple[RunRecord, ...]:
+        """Every readable run, newest first.
+
+        A directory that cannot be parsed is skipped rather than failing the listing:
+        one corrupt run must not hide the others.
+        """
+        if not self.run_root.is_dir():
+            return ()
+        records: list[RunRecord] = []
+        for candidate in self.run_root.iterdir():
+            if not (candidate / "run.json").is_file():
+                continue
+            try:
+                records.append(self.load(candidate.name))
+            except RunStoreError:
+                continue
+        records.sort(key=lambda record: record.created_at, reverse=True)
+        return tuple(records)
 
     def load(self, run_id: str) -> RunRecord:
         path = self.run_dir(run_id) / "run.json"

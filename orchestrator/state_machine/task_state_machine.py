@@ -11,6 +11,10 @@ _ALLOWED_TRANSITIONS: dict[TaskState, set[TaskState]] = {
         TaskState.RUNNING,
         # A run can begin with verification, or reach it straight after an approval.
         TaskState.VERIFYING,
+        # The next step after an approval can itself be an approval - the shipped
+        # workflow's final sign-off follows the plan gate with no worker in between
+        # when earlier nodes are already done. Without this the run stalls in READY.
+        TaskState.WAITING_APPROVAL,
         TaskState.CANCELLED,
         TaskState.BLOCKED,
     },

@@ -130,6 +130,7 @@ class WorkflowRunner:
         record = RunRecord(
             run_id=run_id or f"RUN-{uuid4().hex[:12]}",
             task_id=self.task.task_id,
+            task=self.task.model_dump(mode="json"),
             workflow_id=self.workflow.workflow_id,
             workflow_version=self.workflow.version,
         )
@@ -637,7 +638,7 @@ class WorkflowRunner:
             resume_after_node=node.id,
         )
         record.pending_approval = approval
-        self._transition(record, TaskState.WAITING_APPROVAL)
+        self._enter(record, TaskState.WAITING_APPROVAL)
 
         payload = approval.model_dump(exclude={"resume_after_node"})
         self.store.write_artifact(record.run_id, f"{approval.approval_id}.json", payload)

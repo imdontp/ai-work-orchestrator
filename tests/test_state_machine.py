@@ -26,6 +26,11 @@ def test_verification_is_never_the_end_of_a_run() -> None:
     assert not TaskStateMachine.can_transition(TaskState.VERIFYING, TaskState.COMPLETED)
 
 
+def test_an_approval_can_follow_an_approval() -> None:
+    """A human node reached straight after a gate, with no worker in between."""
+    assert TaskStateMachine.can_transition(TaskState.READY, TaskState.WAITING_APPROVAL)
+
+
 def test_only_an_approval_can_complete_a_run() -> None:
     completers = [
         state for state in TaskState if TaskStateMachine.can_transition(state, TaskState.COMPLETED)
