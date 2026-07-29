@@ -1,25 +1,18 @@
 """Run state, artifacts and the audit trail.
 
-Filesystem-backed on purpose. ``docs/SYSTEM_ARCHITECTURE.md`` targets PostgreSQL, but
-the runner should not learn a storage engine to be testable, so everything it needs is
-behind :class:`RunStore` and a swap later touches this file only.
+:class:`RunStore` is the contract; :class:`FilesystemRunStore` here and
+:class:`~orchestrator.workflow.postgres_store.PostgresRunStore` implement it. The runner
+never learns which one it has.
 
-Layout under ``run_root``::
-
-    <run_id>/
-        run.json            the resumable record
-        events.jsonl        append-only audit trail
-        artifacts/<node>.json
-        logs/               worker stdout, stderr and normalized outcomes
-
-The event log is append-only and never rewritten. A run that crashed mid-node must
-leave behind what it had already established, or the restart reconciliation in
-``WorktreeManager`` has nothing to reconcile against.
+The event log is append-only and never rewritten, in either backend. A run that crashed
+mid-node must leave behind what it had already established, or the restart
+reconciliation in ``WorktreeManager`` has nothing to reconcile against.
 """
 
 from __future__ import annotations
 
 import json
+from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -95,11 +88,17 @@ class RunRecord(BaseModel):
         }
 
 
-class RunStore:
-    """Reads and writes one run's state, artifacts and events."""
+class RunStore(ABC):
+    """Where a run's state, artifacts and audit trail live.
 
-    def __init__(self, run_root: Path) -> None:
-        self.run_root = run_root.expanduser().resolve()
+    Two implementations, one contract. `docs/SYSTEM_ARCHITECTURE.md` targets PostgreSQL
+    for records, events and artifact metadata, and the local filesystem for artifact
+    payloads — so both backends still hand out real directories for worker logs and
+    artifact files. A worker writes files; that is not negotiable by a storage choice.
+    """
+
+    #: Root for the parts that must exist on disk whatever the backend.
+    run_root: Path
 
     # -- layout ------------------------------------------------------------------
 
@@ -114,6 +113,52 @@ class RunStore:
 
     def artifact_path(self, run_id: str, filename: str) -> Path:
         return self.artifact_dir(run_id) / filename
+
+    # -- record ------------------------------------------------------------------
+
+    @abstractmethod
+    def create(self, record: RunRecord) -> RunRecord: ...
+
+    @abstractmethod
+    def load(self, run_id: str) -> RunRecord: ...
+
+    @abstractmethod
+    def save(self, record: RunRecord) -> None: ...
+
+    @abstractmethod
+    def list_runs(self) -> tuple[RunRecord, ...]: ...
+
+    # -- artifacts ---------------------------------------------------------------
+
+    @abstractmethod
+    def write_artifact(self, run_id: str, filename: str, payload: Any) -> Path: ...
+
+    @abstractmethod
+    def read_artifact(self, run_id: str, filename: str) -> Any: ...
+
+    # -- events ------------------------------------------------------------------
+
+    @abstractmethod
+    def append_event(self, run_id: str, event: RunEvent) -> None: ...
+
+    @abstractmethod
+    def read_events(self, run_id: str) -> tuple[RunEvent, ...]: ...
+
+
+class FilesystemRunStore(RunStore):
+    """Everything under ``run_root``. The default, and what the tests run against.
+
+    Layout::
+
+        <run_id>/
+            run.json            the resumable record
+            events.jsonl        append-only audit trail
+            artifacts/<node>.json
+            logs/               worker stdout, stderr and normalized outcomes
+    """
+
+    def __init__(self, run_root: Path) -> None:
+        self.run_root = run_root.expanduser().resolve()
 
     # -- record ------------------------------------------------------------------
 

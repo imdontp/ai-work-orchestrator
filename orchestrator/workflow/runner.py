@@ -44,7 +44,13 @@ from orchestrator.workflow.definition import (
     WorkflowDefinition,
     WorkflowNode,
 )
-from orchestrator.workflow.store import ApprovalRequest, RunEvent, RunRecord, RunStore
+from orchestrator.workflow.store import (
+    ApprovalRequest,
+    FilesystemRunStore,
+    RunEvent,
+    RunRecord,
+    RunStore,
+)
 from workers.base import WorkerAdapter, WorkerRequest, WorkerResult
 from workers.cli_base import extract_json
 
@@ -116,7 +122,7 @@ class WorkflowRunner:
         self.task = task
         self.config = config
         self.adapters = adapters
-        self.store = store or RunStore(config.run_root)
+        self.store = store or FilesystemRunStore(config.run_root)
         self.worktrees = worktree_manager or WorktreeManager(
             config.repository, config.workspace_root
         )

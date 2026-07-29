@@ -18,7 +18,7 @@ from execution.verifier import VerificationCommand
 from orchestrator.domain.models import Task, TaskPermissions, TaskState
 from orchestrator.workflow.definition import WorkflowDefinition
 from orchestrator.workflow.runner import RunnerConfig, WorkflowRunError, WorkflowRunner
-from orchestrator.workflow.store import RunStore
+from orchestrator.workflow.store import FilesystemRunStore, RunStore
 from workers.base import (
     WorkerAdapter,
     WorkerCapabilities,
@@ -177,7 +177,7 @@ def task() -> Task:
 def harness(tmp_path: Path, repository: Path, task: Task):
     workflow = WorkflowDefinition.model_validate(GRAPH)
     run_root = tmp_path / "runs"
-    store = RunStore(run_root)
+    store = FilesystemRunStore(run_root)
     log_dir = tmp_path / "worker-logs"
 
     claude = FakeAdapter("claude_code", log_dir)
@@ -744,7 +744,7 @@ def test_a_run_can_be_continued_by_a_new_runner_instance(harness, repository, ta
         task=task,
         config=runner.config,
         adapters=runner.adapters,
-        store=RunStore(runner.config.run_root),
+        store=FilesystemRunStore(runner.config.run_root),
     )
     codex.queue(structured_result={"status": "completed"})
     claude.queue(structured_result={"verdict": "pass"})
