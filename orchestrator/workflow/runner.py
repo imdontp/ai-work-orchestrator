@@ -121,6 +121,8 @@ class WorkflowRunner:
         )
         self.verifier = verification_runner or VerificationRunner(ProcessManager())
         self.context_builder = context_builder or ContextPackageBuilder()
+        #: Identity fields per contract file, so a schema is read once per run.
+        self._identity_fields: dict[Path, frozenset[str]] = {}
 
     # -- lifecycle ---------------------------------------------------------------
 
@@ -287,7 +289,7 @@ class WorkflowRunner:
 
         if result.reported_error or result.exit_code != 0:
             return NodeOutcome(
-                artifact=self._worker_artifact(node, result),
+                artifact=self._worker_artifact(record, node, result, adapter.name),
                 session_id=result.session_id,
                 failed=True,
                 failure_reason=(
@@ -296,7 +298,7 @@ class WorkflowRunner:
                 ),
             )
 
-        artifact = self._worker_artifact(node, result)
+        artifact = self._worker_artifact(record, node, result, adapter.name)
         return NodeOutcome(
             artifact=artifact,
             session_id=result.session_id,
@@ -424,9 +426,8 @@ class WorkflowRunner:
         """The contract governing this node's deliverable, when one is published.
 
         Without it a worker returns prose, and the runner cannot read a review verdict
-        out of prose — a live run completed with a review that was never inspected.
-        Deliverables with no contract yet (analysis.json, verification-result.json)
-        simply get none.
+        out of prose — a live run completed with a review that was never inspected. A
+        deliverable with no published contract simply gets none.
         """
         if self.config.contracts_root is None:
             return None
@@ -540,24 +541,97 @@ class WorkflowRunner:
         self._event(record, "node_completed", node_id=node.id, detail={"artifact": filename})
         self.store.save(record)
 
-    def _worker_artifact(self, node: WorkflowNode, result: WorkerResult) -> Any:
+    def _worker_artifact(
+        self,
+        record: RunRecord,
+        node: WorkflowNode,
+        result: WorkerResult,
+        worker_name: str,
+    ) -> Any:
         """Prefer the worker's structured outcome; fall back to a described envelope."""
         if result.result_path is not None and result.result_path.is_file():
             payload = json.loads(result.result_path.read_text(encoding="utf-8"))
             structured = payload.get("structured_result")
             if structured is not None:
-                return structured
+                return self._stamp_identity(record, node, structured, worker_name)
             text = payload.get("result_text")
             if isinstance(text, str):
                 parsed = extract_json(text)
                 if parsed is not None:
-                    return parsed
+                    return self._stamp_identity(record, node, parsed, worker_name)
             return payload
         return {
             "node": node.id,
             "exit_code": result.exit_code,
             "error_kind": result.error_kind,
         }
+
+    def _stamp_identity(
+        self,
+        record: RunRecord,
+        node: WorkflowNode,
+        artifact: Any,
+        worker_name: str,
+    ) -> Any:
+        """Overwrite the identity fields with what the orchestrator knows.
+
+        Who ran, for which task, in which run are facts the control plane holds. A
+        worker only guesses at them, and a guess that lands in a published artifact is
+        indistinguishable from a fact once the run is over. A live run had Codex report
+        ``"worker": "/root"`` — it is forced to emit the field, because the derived
+        output schema makes every property required, and it has no way to know the
+        answer. ``worker-result.schema.json`` types ``worker`` as a non-empty string,
+        so the contract cannot catch it either.
+
+        Only fields the deliverable's contract declares are stamped, so a
+        verification-result does not grow a ``worker`` key it never had. Without a
+        contract, only fields the worker already supplied are corrected — inventing a
+        shape for an artifact whose schema is unknown would be a different guess.
+        """
+        if not isinstance(artifact, dict):
+            return artifact
+
+        known = {
+            "worker": worker_name,
+            "task_id": self.task.task_id,
+            "run_id": record.run_id,
+        }
+        allowed = self._identity_fields_for(node)
+        corrected: dict[str, Any] = {}
+        for key, truth in known.items():
+            supplied = key in artifact
+            if not supplied and key not in allowed:
+                continue
+            # An absent field was never claimed, so filling it is not a correction.
+            # Recording it as one would bury the case that matters in noise.
+            if supplied and artifact[key] != truth:
+                corrected[key] = artifact[key]
+            artifact[key] = truth
+
+        if corrected:
+            # The worker mislabelled something it was asked to state. Worth recording:
+            # it is the kind of drift that otherwise only shows up as a puzzling
+            # artifact months later.
+            self._event(
+                record,
+                "identity_corrected",
+                node_id=node.id,
+                detail={"claimed": corrected},
+            )
+        return artifact
+
+    def _identity_fields_for(self, node: WorkflowNode) -> frozenset[str]:
+        """Identity fields the node's deliverable contract declares, if any."""
+        schema_path = self._output_schema_for(node)
+        if schema_path is None:
+            return frozenset()
+        cached = self._identity_fields.get(schema_path)
+        if cached is None:
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            properties = schema.get("properties", {})
+            cached = frozenset({"worker", "task_id", "run_id"} & set(properties))
+            self._identity_fields[schema_path] = cached
+        return cached
 
     def _describe_changes(self, record: RunRecord) -> list[str]:
         """State what is actually on disk, not what a branch name implies.

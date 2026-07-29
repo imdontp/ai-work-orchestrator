@@ -31,6 +31,8 @@ from workers.base import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+CONTRACTS = Path(__file__).resolve().parent.parent / "contracts"
+
 GRAPH = {
     "workflow_id": "test-slice",
     "version": "0.1.0",
@@ -485,6 +487,110 @@ def test_nodes_with_a_published_contract_get_it_as_an_output_schema(harness) -> 
     assert claude.requests[0].output_schema_path.name == "analysis-result.schema.json"
     assert codex.requests[0].output_schema_path.name == "worker-result.schema.json"
     assert claude.requests[-1].output_schema_path.name == "review-result.schema.json"
+
+
+# ---------------------------------------------------------------------------
+# Artifact identity
+# ---------------------------------------------------------------------------
+
+
+def _run_to_completion(runner, store) -> None:
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+
+
+def test_the_runner_overwrites_identity_fields_the_worker_got_wrong(harness) -> None:
+    """A live run had Codex report `"worker": "/root"`. It cannot know; the runner can."""
+    runner, claude, codex, store = harness
+    runner.config.contracts_root = CONTRACTS
+    claude.queue(structured_result={"plan": [], "task_id": "TASK-999"})
+    codex.queue(
+        structured_result={
+            "status": "completed",
+            "worker": "/root",
+            "task_id": "TASK-999",
+            "run_id": "RUN-WHATEVER",
+        }
+    )
+    claude.queue(structured_result={"verdict": "pass"})
+
+    _run_to_completion(runner, store)
+
+    implemented = store.read_artifact("RUN-1", "implement-worker-result.json")
+    assert implemented["worker"] == "codex"
+    assert implemented["task_id"] == "TASK-001"
+    assert implemented["run_id"] == "RUN-1"
+
+
+def test_a_corrected_identity_is_recorded_rather_than_silently_replaced(harness) -> None:
+    runner, claude, codex, store = harness
+    runner.config.contracts_root = CONTRACTS
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed", "worker": "/root"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    _run_to_completion(runner, store)
+
+    corrections = [
+        event for event in store.read_events("RUN-1") if event.kind == "identity_corrected"
+    ]
+    claimed = [event.detail["claimed"] for event in corrections]
+    assert {"worker": "/root"} in claimed
+
+
+def test_an_identity_field_the_contract_omits_is_not_invented(harness) -> None:
+    """analysis-result declares task_id and no run_id. Stamping one in would be drift."""
+    runner, claude, codex, store = harness
+    runner.config.contracts_root = CONTRACTS
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    _run_to_completion(runner, store)
+
+    analysis = store.read_artifact("RUN-1", "analyze-analysis.json")
+    assert analysis["task_id"] == "TASK-001"
+    assert "run_id" not in analysis
+    assert "worker" not in analysis
+
+
+def test_without_a_contract_only_fields_the_worker_supplied_are_corrected(harness) -> None:
+    """Unknown shape, so a wrong value is fixed but no key is added to it."""
+    runner, claude, codex, store = harness
+    assert runner.config.contracts_root is None
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed", "worker": "/root"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    _run_to_completion(runner, store)
+
+    implemented = store.read_artifact("RUN-1", "implement-worker-result.json")
+    assert implemented["worker"] == "codex"
+    assert "task_id" not in implemented
+    assert "run_id" not in implemented
+
+
+def test_a_correct_identity_produces_no_correction_event(harness) -> None:
+    runner, claude, codex, store = harness
+    runner.config.contracts_root = CONTRACTS
+    claude.queue(structured_result={"plan": [], "task_id": "TASK-001"})
+    codex.queue(
+        structured_result={
+            "status": "completed",
+            "worker": "codex",
+            "task_id": "TASK-001",
+            "run_id": "RUN-1",
+        }
+    )
+    claude.queue(
+        structured_result={"verdict": "pass", "task_id": "TASK-001", "run_id": "RUN-1"}
+    )
+
+    _run_to_completion(runner, store)
+
+    assert "identity_corrected" not in _kinds(store, "RUN-1")
 
 
 # ---------------------------------------------------------------------------

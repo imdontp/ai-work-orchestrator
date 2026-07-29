@@ -372,7 +372,9 @@ def test_artifacts_are_served_by_name(client) -> None:
     name = detail["artifacts"]["analyze"]
     payload = test_client.get(f"/api/v1/runs/{run_id}/artifacts/{name}").json()
 
-    assert payload == {"plan": ["add multiply"]}
+    assert payload["plan"] == ["add multiply"]
+    # Stamped by the runner, not claimed by the worker.
+    assert payload["task_id"] == "TASK-001"
 
 
 def test_an_unlisted_artifact_name_is_refused(client) -> None:
