@@ -38,8 +38,9 @@ contract — `FilesystemRunStore` and `PostgresRunStore` — selected by
 `RUN_STORE_BACKEND`, and `tests/test_run_store.py` runs one suite against both.
 
 The HTTP surface is in `apps/api/app/routers/runs.py`: submit a task, list runs, fetch
-one run, advance it, read its events, fetch the approval package, fetch a named
-artifact, post a decision. `OrchestrationService` supervises the background advances.
+one run, advance it, cancel it, read its events, fetch the approval package, fetch a
+named artifact, post a decision. `OrchestrationService` supervises the background
+advances and holds the runner for each, so a cancel can reach the worker it started.
 
 Four defects surfaced while wiring this up and are fixed:
 
@@ -143,19 +144,53 @@ is broken today.
 
 No new defect surfaced. Unlike runs 1 and 2, this path behaved as designed throughout.
 
+### Run 4 — cancellation, and the feature it turned out to need
+
+Driving this one started by finding there was nothing to drive. `MVP_SCOPE.md` lists
+cancellation in scope and its definition of done says cancellation is visible, but the
+only way to stop a run was to reject an approval — which requires the run to already be
+paused. `WorkerAdapter.cancel` and `ProcessManager.cancel` existed and had no callers
+anywhere outside `workers/`, `execution/` and the tests. A worker mid-flight could not
+be stopped; the only recourse was to wait out `node_timeout_seconds`, thirty minutes by
+default.
+
+Rejecting at the plan gate was confirmed live first — `WAITING_APPROVAL → CANCELLED`,
+the operator's reason kept as the failure, and a terminal run refusing both `/advance`
+and `/decision` with 409. Then cancellation of a *running* run was implemented across
+the runner, the service and the API (`8ad7ce5`), and driven against the real CLI: a run
+cancelled while Claude Code was working reached `CANCELLED` in about 1.6 seconds, the
+worker process was gone, and `repair_rounds` stayed at 0 — a killed worker exits
+non-zero, and without a guard the run would have spent a repair round retrying the node
+the operator had just stopped.
+
+That live run also exposed a race. `wait` is woken by the death of the process, which
+happens inside the kill, before `cancel` has recorded how it killed — so the outcome
+recorded `termination: null` for a process `taskkill` had in fact killed. The kill was
+never in doubt; the audit trail was. `ProcessHandle` now carries an event that `cancel`
+creates before its first await, and `wait` waits for it. The pre-existing cancel test
+could not have caught this: it cancels and then waits, where a real run has `wait`
+running as its own task. Re-run against the real CLI afterwards, the outcome records
+`termination: "taskkill_tree"`.
+
 ### Still unevidenced
 
-A verification failure, a review returning `request_changes`, a containment violation
-and a cancellation have unit coverage and no live run behind them. All three runs used
-toy repositories, not a real project.
+A verification failure, a review returning `request_changes` and a containment violation
+have unit coverage and no live run behind them. Each needs a worker to fail in a
+particular way, and the runs so far suggest that is hard to arrange with workers that
+report honestly — run 2's implementer declined a loophole it had been shown and reported
+`blocked` instead. All runs used toy repositories, not a real project.
 
 ## Recommended next action
 
-Drive a cancellation — a cancel issued while a worker is running. Like the timeout it
-can be forced directly, where the remaining paths need a worker to fail in a particular
-way, which the runs so far suggest is hard to arrange with workers that report honestly.
+Run the pipeline against a real project rather than a toy repository. Every run so far
+used a repository built for the run, small enough that the analysis fits in one pass and
+the implementation is a single file. A real checkout is where context size, existing
+conventions and a test suite that takes minutes rather than milliseconds start to
+matter, and none of that has been observed.
 
-After that, run the pipeline against a real project rather than a toy repository.
+The paths still unevidenced are better reached opportunistically than staged: a
+verification failure and a review asking for changes will happen on their own once the
+work is large enough to get wrong.
 
 Keep `workers/opencode.py` a placeholder.
 
@@ -168,8 +203,8 @@ Do not begin the web dashboard yet (ADR-009).
 
 Named here rather than discovered later:
 
-- No live evidence for a verification failure, review-requested changes, a containment
-  violation or a cancellation. See the section above.
+- No live evidence for a verification failure, review-requested changes or a containment
+  violation. See the section above.
 - The API is unauthenticated. This is deliberate for a single-user local control plane
   and the reasoning is recorded in `docs/SECURITY_POLICY.md`; it is not a gap that has
   been overlooked, and it is a gap that must close before the API leaves localhost.

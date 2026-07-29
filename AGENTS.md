@@ -79,10 +79,18 @@ evidence for blocker B1: `ProcessManager` recorded `termination: "taskkill_tree"
 three attempts and left no orphaned process, where until then only unit tests with
 stand-in processes had exercised the Windows branch.
 
-A failing verification, a review asking for changes, a containment violation and a
-cancellation still have unit coverage and no live evidence, and all three runs used
-throwaway repositories rather than a real project. `docs/START_HERE.md` records what
-each run established and what it did not.
+A fourth run set out to drive a cancellation and found there was nothing to drive:
+`WorkerAdapter.cancel` and `ProcessManager.cancel` had no callers, so a run could only
+be stopped by rejecting an approval, which needs the run to already be paused. Rule 8's
+"no destructive command" does not mean an operator cannot stop their own run — the
+plumbing was simply never connected. It now is, across the runner, the service and
+`POST /runs/{run_id}/cancel`, and a run cancelled while Claude Code was working reached
+`CANCELLED` in about 1.6 seconds without spending a repair round.
+
+A failing verification, a review asking for changes and a containment violation still
+have unit coverage and no live evidence, and every run so far used a throwaway
+repository rather than a real project — which is the next thing to change.
+`docs/START_HERE.md` records what each run established and what it did not.
 
 ## Allowed work
 
