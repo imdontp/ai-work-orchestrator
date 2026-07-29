@@ -72,8 +72,10 @@ class NodeOutcome:
     session_id: str | None = None
     failed: bool = False
     failure_reason: str | None = None
-    #: Set when the node's own output asks for changes, e.g. a review verdict.
-    requests_changes: bool = False
+    #: Why the node's own output sends the run back, e.g. a review verdict. None when
+    #: it does not. Carries the reason rather than a flag, because the audit trail
+    #: records it verbatim and more than one kind of output can ask for a repair.
+    change_request: str | None = None
 
 
 @dataclass
@@ -180,11 +182,13 @@ class WorkflowRunner:
 
             self._record_artifact(record, node, outcome)
 
-            if outcome.requests_changes:
+            if outcome.change_request is not None:
                 if self._can_repair(record):
-                    self._start_repair(record, node, "review requested changes")
+                    self._start_repair(record, node, outcome.change_request)
                     continue
-                self._fail(record, node, "review requested changes and the repair budget is spent")
+                self._fail(
+                    record, node, f"{outcome.change_request}, and the repair budget is spent"
+                )
                 return record
 
             if node.approval_after is not None:
@@ -307,7 +311,7 @@ class WorkflowRunner:
         return NodeOutcome(
             artifact=artifact,
             session_id=result.session_id,
-            requests_changes=_asks_for_changes(artifact),
+            change_request=_change_request_reason(node, artifact),
         )
 
     async def _run_verification(self, record: RunRecord, node: WorkflowNode) -> NodeOutcome:
@@ -867,13 +871,23 @@ def _claimed_passed(artifacts: dict[str, Any]) -> bool | None:
     return None
 
 
-def _asks_for_changes(artifact: Any) -> bool:
+def _change_request_reason(node: WorkflowNode, artifact: Any) -> str | None:
+    """Why this artifact sends the run back for repair, or None if it does not.
+
+    The reason is derived from the artifact rather than assumed from the fact that a
+    repair started. A live run whose implementer reported ``status: "blocked"`` recorded
+    "review requested changes" on every repair event and in its final failure, naming a
+    review node that had not run — the run's own audit trail described something that
+    did not happen.
+    """
     if not isinstance(artifact, dict):
-        return False
+        return None
     verdict = artifact.get("verdict")
     if isinstance(verdict, str) and verdict.lower() in {"fail", "request_changes", "changes"}:
-        return True
-    return artifact.get("status") == "blocked"
+        return f"{node.id} returned {verdict.lower()}"
+    if artifact.get("status") == "blocked":
+        return f"{node.id} reported it was blocked"
+    return None
 def _render_prompt(node: WorkflowNode, package: Any) -> str:
     """Render the context package as the worker's prompt.
 

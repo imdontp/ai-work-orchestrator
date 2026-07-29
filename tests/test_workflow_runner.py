@@ -772,6 +772,63 @@ def test_repair_is_bounded(harness) -> None:
     assert "repair budget is spent" in (record.failure or "")
 
 
+def test_a_repair_names_the_node_that_asked_for_it(harness) -> None:
+    """A live run recorded "review requested changes" for a blocked implementer."""
+    runner, claude, codex, store = harness
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "blocked", "summary": "cannot reach the network"})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+
+    repairs = [e for e in store.read_events("RUN-1") if e.kind == "repair_started"]
+    assert repairs, _kinds(store, "RUN-1")
+    reason = repairs[0].detail["reason"]
+    assert "implement" in reason and "blocked" in reason, reason
+    # The review node never ran, so nothing may claim it asked for anything.
+    assert "review" not in reason, reason
+
+
+def test_a_blocked_worker_that_exhausts_the_budget_fails_for_the_right_reason(
+    harness,
+) -> None:
+    runner, claude, codex, store = harness
+    runner.workflow = runner.workflow.model_copy(update={"max_repair_rounds": 1})
+    claude.queue(structured_result={"plan": []})
+    for _ in range(4):
+        codex.queue(structured_result={"status": "blocked"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    assert record.task_state is TaskState.FAILED_PERMANENT
+    assert "implement reported it was blocked" in (record.failure or "")
+    assert "repair budget is spent" in (record.failure or "")
+    assert "review" not in (record.failure or "")
+
+
+def test_a_review_verdict_still_names_the_review(harness) -> None:
+    """The other path through the same branch must not lose its own wording."""
+    runner, claude, codex, store = harness
+    runner.workflow = runner.workflow.model_copy(update={"max_repair_rounds": 0})
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "request_changes"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    assert "review returned request_changes" in (record.failure or "")
+
+
 # ---------------------------------------------------------------------------
 # Approvals
 # ---------------------------------------------------------------------------
