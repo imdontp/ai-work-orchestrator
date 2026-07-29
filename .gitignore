@@ -46,6 +46,7 @@ runs/*
 !runs/.gitkeep
 worktrees/*
 !worktrees/.gitkeep
+!worktrees/README.md
 sessions/
 transcripts/
 *.log
@@ -126,3 +127,6 @@ scratch/
 *.bak
 *.orig
 *.rej
+
+# Exported host trust store, for scripts/verify_posix.sh. Machine-specific.
+.ca-bundle.pem

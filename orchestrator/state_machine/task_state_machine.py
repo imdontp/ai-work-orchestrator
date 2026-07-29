@@ -7,7 +7,17 @@ class InvalidTransition(ValueError):
 
 _ALLOWED_TRANSITIONS: dict[TaskState, set[TaskState]] = {
     TaskState.PENDING: {TaskState.READY, TaskState.CANCELLED, TaskState.BLOCKED},
-    TaskState.READY: {TaskState.RUNNING, TaskState.CANCELLED, TaskState.BLOCKED},
+    TaskState.READY: {
+        TaskState.RUNNING,
+        # A run can begin with verification, or reach it straight after an approval.
+        TaskState.VERIFYING,
+        # The next step after an approval can itself be an approval - the shipped
+        # workflow's final sign-off follows the plan gate with no worker in between
+        # when earlier nodes are already done. Without this the run stalls in READY.
+        TaskState.WAITING_APPROVAL,
+        TaskState.CANCELLED,
+        TaskState.BLOCKED,
+    },
     TaskState.RUNNING: {
         TaskState.VERIFYING,
         TaskState.WAITING_APPROVAL,
@@ -17,6 +27,11 @@ _ALLOWED_TRANSITIONS: dict[TaskState, set[TaskState]] = {
         TaskState.INTERRUPTED,
     },
     TaskState.VERIFYING: {
+        # READY, so the run can continue into a node that follows verification. The
+        # shipped workflow puts independent review after verify, and without this edge
+        # that graph could not be executed at all. Note there is still no
+        # VERIFYING -> COMPLETED: passing verification is never the end of a run.
+        TaskState.READY,
         TaskState.WAITING_APPROVAL,
         TaskState.FAILED_RETRYABLE,
         TaskState.FAILED_PERMANENT,

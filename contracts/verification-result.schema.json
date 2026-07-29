@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.ai-work-orchestrator/contracts/verification-result.schema.json",
+  "title": "Verification Result",
+  "description": "What the system established by running commands itself. Produced by the orchestrator, never by a worker: the point of this artifact is that nothing in it is a worker's claim.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verified",
+    "claimed_passed",
+    "commands"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "verified": {
+      "description": "Every configured command ran and exited zero. False when any failed, timed out, or when no commands were configured at all.",
+      "type": "boolean"
+    },
+    "claimed_passed": {
+      "description": "What the worker said about its own verification, from worker-result.verification.claimed_passed. Recorded next to the mechanical result so the two can be compared. Null when the worker made no claim.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "reason": {
+      "description": "Why verification did not establish anything, when it did not.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "args",
+          "exit_code",
+          "timed_out"
+        ],
+        "properties": {
+          "args": {
+            "description": "The argv that was executed. No shell string: the command is recorded exactly as it was run.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "timed_out": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "evidence_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    }
+  }
+}

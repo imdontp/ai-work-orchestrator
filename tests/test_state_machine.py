@@ -15,3 +15,24 @@ def test_completed_is_terminal() -> None:
 
 def test_worker_completion_requires_verification_or_approval() -> None:
     assert not TaskStateMachine.can_transition(TaskState.RUNNING, TaskState.COMPLETED)
+
+
+def test_verification_can_lead_into_a_following_node() -> None:
+    """The shipped workflow puts independent review after verify."""
+    assert TaskStateMachine.can_transition(TaskState.VERIFYING, TaskState.READY)
+
+
+def test_verification_is_never_the_end_of_a_run() -> None:
+    assert not TaskStateMachine.can_transition(TaskState.VERIFYING, TaskState.COMPLETED)
+
+
+def test_an_approval_can_follow_an_approval() -> None:
+    """A human node reached straight after a gate, with no worker in between."""
+    assert TaskStateMachine.can_transition(TaskState.READY, TaskState.WAITING_APPROVAL)
+
+
+def test_only_an_approval_can_complete_a_run() -> None:
+    completers = [
+        state for state in TaskState if TaskStateMachine.can_transition(state, TaskState.COMPLETED)
+    ]
+    assert completers == [TaskState.WAITING_APPROVAL]
