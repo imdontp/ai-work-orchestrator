@@ -201,7 +201,8 @@ Do not begin the web dashboard yet (ADR-009).
 
 ## Not yet done
 
-Named here rather than discovered later:
+Named here rather than discovered later. `docs/BACKLOG.md` carries the same items in
+the order they should be picked up, with what each one needs to be considered done.
 
 - No live evidence for a verification failure, review-requested changes or a containment
   violation. See the section above.
