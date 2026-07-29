@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -43,9 +43,15 @@ class WorkerRequest:
     #: exclusive with session_id. Review nodes must leave this unset — the workflow
     #: requires a fresh session for independent review.
     resume_from: str | None = None
-    #: Tool names the worker may use. ``None`` means the CLI's default set; an empty
-    #: tuple means no tools at all.
-    allowed_tools: tuple[str, ...] | None = None
+    #: What the worker is allowed to do with its tools, named in terms every provider
+    #: can honour. The adapter maps this to its own CLI's vocabulary — the orchestrator
+    #: must not know that Claude Code spells reading "Read,Glob,Grep" while Codex has no
+    #: tool flag at all and governs the same thing through its sandbox mode.
+    #:
+    #: "none"      no tools; the worker may only reason about what it was given
+    #: "read"      inspect the workspace, change nothing
+    #: "write"     inspect and modify the workspace
+    tool_access: Literal["none", "read", "write"] = "read"
     #: "read_only" or "scoped_write", mirroring TaskPermissions.filesystem.
     filesystem_access: str = "read_only"
 

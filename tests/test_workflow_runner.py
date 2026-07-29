@@ -294,8 +294,7 @@ def test_a_read_only_node_depending_on_a_write_node_reads_the_worktree(harness) 
     assert review_request.workspace == worktree_path
     # It reads the worktree; it does not get write access to it.
     assert review_request.filesystem_access == "read_only"
-    assert "Read" in review_request.allowed_tools
-    assert not {"Write", "Edit"} & set(review_request.allowed_tools)
+    assert review_request.tool_access == "read"
     # The analysis node has no write dependency, so it stays on the primary checkout.
     assert claude.requests[0].workspace == runner.config.repository
 
@@ -355,11 +354,10 @@ def test_read_only_nodes_can_read_but_not_write(harness) -> None:
     asyncio.run(runner.advance("RUN-1"))
 
     for request in (claude.requests[0], claude.requests[-1]):
-        assert "Read" in request.allowed_tools
-        assert not {"Write", "Edit"} & set(request.allowed_tools)
+        assert request.tool_access == "read"
         assert request.filesystem_access == "read_only"
 
-    assert "Write" in codex.requests[0].allowed_tools
+    assert codex.requests[0].tool_access == "write"
 
 
 def test_context_package_carries_prior_artifacts_not_transcripts(harness) -> None:
@@ -484,10 +482,9 @@ def test_nodes_with_a_published_contract_get_it_as_an_output_schema(harness) -> 
     runner.decide("RUN-1", "approve")
     asyncio.run(runner.advance("RUN-1"))
 
+    assert claude.requests[0].output_schema_path.name == "analysis-result.schema.json"
     assert codex.requests[0].output_schema_path.name == "worker-result.schema.json"
     assert claude.requests[-1].output_schema_path.name == "review-result.schema.json"
-    # analysis.json has no published contract yet.
-    assert claude.requests[0].output_schema_path is None
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +516,54 @@ def test_verification_is_rerun_and_can_contradict_the_worker(tmp_path, harness) 
     assert "verification_finished" in _kinds(store, "RUN-1")
     assert record.repair_rounds >= 1
     assert record.task_state is not TaskState.COMPLETED
+
+
+def test_the_verification_artifact_conforms_to_its_published_contract(harness) -> None:
+    """The orchestrator produces this one itself, so nothing else will catch drift."""
+    import jsonschema
+
+    runner, claude, codex, store = harness
+    contract = json.loads(
+        (Path(__file__).resolve().parent.parent / "contracts" / "verification-result.schema.json")
+        .read_text(encoding="utf-8")
+    )
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    jsonschema.validate(store.read_artifact("RUN-1", record.artifacts["verify"]), contract)
+
+
+def test_the_unverified_artifact_also_conforms(harness) -> None:
+    """The "nothing was proven" shape must be a valid verification result too."""
+    import jsonschema
+
+    runner, claude, codex, store = harness
+    runner.config.verification_commands = []
+    runner.workflow = runner.workflow.model_copy(update={"max_repair_rounds": 0})
+    contract = json.loads(
+        (Path(__file__).resolve().parent.parent / "contracts" / "verification-result.schema.json")
+        .read_text(encoding="utf-8")
+    )
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+
+    # The node failed, so no artifact was recorded; validate the payload it produced.
+    outcome = asyncio.run(
+        runner._run_verification(store.load("RUN-1"), runner.workflow.node("verify"))
+    )
+    jsonschema.validate(outcome.artifact, contract)
+    assert outcome.artifact["verified"] is False
 
 
 def test_a_run_with_no_verification_commands_fails_rather_than_passes(harness) -> None:

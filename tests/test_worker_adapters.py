@@ -140,23 +140,35 @@ def test_claude_argv_resumes_without_pinning(claude: ClaudeCodeAdapter, tmp_path
     assert "--session-id" not in argv
 
 
-def test_claude_argv_disables_tools_for_an_analysis_node(
+def test_claude_argv_disables_tools_for_a_reason_only_node(
     claude: ClaudeCodeAdapter, tmp_path: Path
 ) -> None:
-    argv = claude.build_argv(_request(tmp_path, allowed_tools=()))
+    argv = claude.build_argv(_request(tmp_path, tool_access="none"))
 
     assert argv[argv.index("--tools") + 1] == ""
     assert "--permission-mode" not in argv
+
+
+def test_claude_maps_read_access_to_its_own_tool_names(
+    claude: ClaudeCodeAdapter, tmp_path: Path
+) -> None:
+    """The orchestrator asks for a capability; only the adapter knows the vocabulary."""
+    argv = claude.build_argv(_request(tmp_path, tool_access="read"))
+    tools = set(argv[argv.index("--tools") + 1].split(","))
+
+    assert {"Read", "Glob", "Grep"} <= tools
+    assert not {"Write", "Edit", "Bash"} & tools
 
 
 def test_claude_argv_accepts_edits_only_for_a_write_task(
     claude: ClaudeCodeAdapter, tmp_path: Path
 ) -> None:
     argv = claude.build_argv(
-        _request(tmp_path, allowed_tools=("Read", "Write"), filesystem_access="scoped_write")
+        _request(tmp_path, tool_access="write", filesystem_access="scoped_write")
     )
+    tools = set(argv[argv.index("--tools") + 1].split(","))
 
-    assert argv[argv.index("--tools") + 1] == "Read,Write"
+    assert {"Read", "Write", "Edit"} <= tools
     assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
 
 

@@ -51,7 +51,7 @@ def _request(tmp_path: Path, **overrides) -> WorkerRequest:
         timeout_seconds=180,
         environment={},
         model="sonnet",
-        allowed_tools=(),
+        tool_access="none",
     )
     defaults.update(overrides)
     # Built only when the caller did not supply one. `setdefault` would not do: its

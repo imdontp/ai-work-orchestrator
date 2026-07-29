@@ -96,13 +96,6 @@ class RunnerConfig:
     #: published contract gets it passed to the worker as an output schema, so the
     #: artifact conforms instead of being prose the runner cannot interpret.
     contracts_root: Path | None = None
-    #: Tools granted to a write node.
-    write_tools: tuple[str, ...] = ("Read", "Write", "Edit", "Bash")
-    #: Tools granted to a read-only node. Not empty: a live run put the reviewer in the
-    #: right worktree with no tools at all, and it returned `verdict: pass` while
-    #: recording that it had been given nothing capable of reading the code. A review
-    #: of a narrative is not the independent review the MVP calls for.
-    read_tools: tuple[str, ...] = ("Read", "Glob", "Grep")
 
 
 class WorkflowRunner:
@@ -406,9 +399,7 @@ class WorkflowRunner:
             system_prompt=self._system_prompt_for(node),
             model=self.config.models.get(node.worker_requirement),
             resume_from=resume_from,
-            allowed_tools=(
-                self.config.write_tools if node.needs_worktree else self.config.read_tools
-            ),
+            tool_access="write" if node.needs_worktree else "read",
             filesystem_access="scoped_write" if node.needs_worktree else "read_only",
         )
 

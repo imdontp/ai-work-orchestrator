@@ -57,6 +57,16 @@ def _schema_for_cli(path: Path) -> str:
     return json.dumps(schema)
 
 
+#: WorkerRequest.tool_access rendered in this CLI's vocabulary. Glob and Grep are
+#: included in "read" because a reviewer that can open a named file but cannot find one
+#: is not equipped to review a change it was not handed a file list for.
+_TOOLS_BY_ACCESS = {
+    "none": (),
+    "read": ("Read", "Glob", "Grep"),
+    "write": ("Read", "Glob", "Grep", "Write", "Edit", "Bash"),
+}
+
+
 class ClaudeCodeAdapter(CliWorkerAdapter):
     name = "claude_code"
 
@@ -110,9 +120,9 @@ class ClaudeCodeAdapter(CliWorkerAdapter):
         if request.model:
             argv += ["--model", request.model]
 
-        if request.allowed_tools is not None:
-            # "" disables every tool, which is what an analysis-only node wants.
-            argv += ["--tools", ",".join(request.allowed_tools)]
+        # The orchestrator asks for a capability; this is where it becomes flags.
+        # "" disables every tool, which is what a reason-only node wants.
+        argv += ["--tools", ",".join(_TOOLS_BY_ACCESS[request.tool_access])]
 
         if request.filesystem_access == "scoped_write":
             # No human is at the terminal to answer a prompt. The orchestrator granted
