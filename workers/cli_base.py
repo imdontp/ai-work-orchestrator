@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import shutil
 from abc import abstractmethod
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -281,3 +282,43 @@ def _read_text(path: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+_FENCED_BLOCK = re.compile(r"```[A-Za-z0-9_-]*\r?\n(.*?)```", re.DOTALL)
+
+
+def extract_json(text: str | None) -> Any:
+    """Pull the first complete JSON value out of a worker's answer.
+
+    Workers do not hand back bare JSON even when asked. Observed in a single live run:
+    one wrapped its object in a ```json fence and followed it with a paragraph of
+    prose, another emitted two complete objects back to back. A plain ``json.loads``
+    returns nothing useful in either case, and the runner then cannot read a verdict
+    or a verification claim out of the artifact.
+
+    Returns ``None`` when nothing parses, which callers treat as "no structured
+    result" rather than as an error.
+    """
+    if not text:
+        return None
+
+    decoder = json.JSONDecoder()
+    for candidate in _json_candidates(text.strip()):
+        try:
+            # raw_decode stops at the end of the first value and ignores what follows.
+            value, _ = decoder.raw_decode(candidate)
+        except json.JSONDecodeError:
+            continue
+        return value
+    return None
+
+
+def _json_candidates(text: str) -> Iterator[str]:
+    for match in _FENCED_BLOCK.finditer(text):
+        inner = match.group(1).strip()
+        if inner.startswith(("{", "[")):
+            yield inner
+
+    starts = [position for position in (text.find("{"), text.find("[")) if position >= 0]
+    if starts:
+        yield text[min(starts) :]

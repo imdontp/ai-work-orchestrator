@@ -46,6 +46,7 @@ from orchestrator.workflow.definition import (
 )
 from orchestrator.workflow.store import ApprovalRequest, RunEvent, RunRecord, RunStore
 from workers.base import WorkerAdapter, WorkerRequest, WorkerResult
+from workers.cli_base import extract_json
 
 
 class WorkflowRunError(RuntimeError):
@@ -550,7 +551,7 @@ class WorkflowRunner:
                 return structured
             text = payload.get("result_text")
             if isinstance(text, str):
-                parsed = _maybe_json(text)
+                parsed = extract_json(text)
                 if parsed is not None:
                     return parsed
             return payload
@@ -783,18 +784,6 @@ def _asks_for_changes(artifact: Any) -> bool:
     if isinstance(verdict, str) and verdict.lower() in {"fail", "request_changes", "changes"}:
         return True
     return artifact.get("status") == "blocked"
-
-
-def _maybe_json(text: str) -> Any:
-    stripped = text.strip()
-    if not stripped.startswith(("{", "[")):
-        return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
-
-
 def _render_prompt(node: WorkflowNode, package: Any) -> str:
     """Render the context package as the worker's prompt.
 

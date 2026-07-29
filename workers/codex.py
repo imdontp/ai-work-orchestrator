@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from workers.base import WorkerCapabilities, WorkerRequest
-from workers.cli_base import CliOutcome, CliWorkerAdapter, WorkerAdapterError
+from workers.cli_base import CliOutcome, CliWorkerAdapter, WorkerAdapterError, extract_json
 
 _SANDBOX_BY_ACCESS = {
     "read_only": "read-only",
@@ -171,7 +171,11 @@ class CodexAdapter(CliWorkerAdapter):
                 message = event.get("message")
                 errors.append(message if isinstance(message, str) else json.dumps(event))
 
-        result_text = "\n".join(message_parts) or None
+        # The last agent message is the answer; earlier ones are narration. Joining
+        # them produced invalid JSON in a live run, where codex emitted two complete
+        # objects in a row and the second was the real result. This matches what
+        # --output-last-message writes.
+        result_text = message_parts[-1] if message_parts else None
         combined_errors = " ".join(errors) + " " + stderr
 
         if errors:
@@ -197,7 +201,7 @@ class CodexAdapter(CliWorkerAdapter):
         return CliOutcome(
             session_id=session_id,
             result_text=result_text,
-            structured_result=_maybe_json(result_text),
+            structured_result=extract_json(result_text),
             reported_error=False,
             usage=usage,
         )
@@ -289,14 +293,3 @@ def _classify(text: str) -> str:
     if "model" in lowered and "not supported" in lowered:
         return "model"
     return "runtime"
-
-
-def _maybe_json(text: str) -> Any:
-    """Return the parsed final message when --output-schema made it JSON."""
-    stripped = text.strip()
-    if not stripped.startswith(("{", "[")):
-        return None
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        return None

@@ -17,7 +17,7 @@ import pytest
 
 from workers.base import WorkerHandle, WorkerRequest
 from workers.claude_code import ClaudeCodeAdapter
-from workers.cli_base import CliWorkerAdapter, WorkerAdapterError
+from workers.cli_base import CliWorkerAdapter, WorkerAdapterError, extract_json
 from workers.codex import CodexAdapter
 
 # Recorded from the spike, trimmed to the fields the adapters read.
@@ -422,11 +422,68 @@ def test_codex_classifies_the_401_retry_storm_as_auth(codex: CodexAdapter) -> No
     assert outcome.session_id == "t"
 
 
+def test_codex_takes_the_last_agent_message_as_the_answer(codex: CodexAdapter) -> None:
+    """A live run had codex emit two complete objects; joining them broke the JSON."""
+    stream = "\n".join(
+        [
+            json.dumps({"type": "thread.started", "thread_id": "t"}),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": '{"status":"in_progress"}'},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": '{"status":"completed"}'},
+                }
+            ),
+        ]
+    )
+    outcome = codex.parse_output(stream, "")
+
+    assert outcome.structured_result == {"status": "completed"}
+    assert outcome.result_text == '{"status":"completed"}'
+
+
 def test_codex_reports_a_clap_usage_error(codex: CodexAdapter) -> None:
     outcome = codex.parse_output("", "error: invalid value 'nope' for '--sandbox <SANDBOX_MODE>'")
 
     assert outcome.reported_error is True
     assert outcome.error_kind == "usage"
+
+
+# ---------------------------------------------------------------------------
+# Reading JSON out of what workers actually return
+# ---------------------------------------------------------------------------
+
+
+def test_extract_json_reads_a_bare_object() -> None:
+    assert extract_json('{"verdict":"pass"}') == {"verdict": "pass"}
+
+
+def test_extract_json_unwraps_a_markdown_fence() -> None:
+    """Observed live: an analysis came back fenced and followed by a paragraph."""
+    text = '```json\n{"verdict": "pass"}\n```\n\nI checked both files and they look fine.'
+    assert extract_json(text) == {"verdict": "pass"}
+
+
+def test_extract_json_ignores_prose_after_the_value() -> None:
+    assert extract_json('{"a":1}\n\nThat is my answer.') == {"a": 1}
+
+
+def test_extract_json_ignores_prose_before_the_value() -> None:
+    assert extract_json('Here is the result:\n{"a":1}') == {"a": 1}
+
+
+def test_extract_json_takes_the_first_of_several_values() -> None:
+    assert extract_json('{"first":1}\n{"second":2}') == {"first": 1}
+
+
+@pytest.mark.parametrize("text", ["", None, "no json here at all", "{not valid}"])
+def test_extract_json_returns_none_when_nothing_parses(text) -> None:
+    assert extract_json(text) is None
 
 
 # ---------------------------------------------------------------------------
