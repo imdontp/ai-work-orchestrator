@@ -87,10 +87,18 @@ plumbing was simply never connected. It now is, across the runner, the service a
 `POST /runs/{run_id}/cancel`, and a run cancelled while Claude Code was working reached
 `CANCELLED` in about 1.6 seconds without spending a repair round.
 
-A failing verification, a review asking for changes and a containment violation still
-have unit coverage and no live evidence, and every run so far used a throwaway
-repository rather than a real project — which is the next thing to change.
-`docs/START_HERE.md` records what each run established and what it did not.
+Runs 6 and 7 used a real project — 420 tracked files, a 283-second suite — with the same
+task both times and only the orchestrator changed between them. Run 6 failed by its own
+rules: correct work, marked `FAILED_PERMANENT` because the target's suite was already
+red. Verification is now judged against the base revision rather than against green
+(`1314db0`), and run 7 reached `COMPLETED`. Rule 5 still holds — the worker's claim is
+recorded and disbelieved — but the question it answers is "did this run break something",
+not "is this repository green", which was never answerable.
+
+A review asking for changes and a containment violation still have unit coverage and no
+live evidence. Both need a worker to fail in a particular way, and seven runs suggest
+that is hard to stage with workers that report honestly. `docs/START_HERE.md` records
+what each run established and what it did not; `docs/BACKLOG.md` holds what is left.
 
 ## Allowed work
 

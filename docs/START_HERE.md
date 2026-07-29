@@ -2,10 +2,10 @@
 
 ## Current status
 
-Milestone 0 foundation and the Milestone 1 CLI capability spike are complete, the
-Milestone 2 execution slice is merged, and **one run has been driven end to end against
-the real Claude Code and Codex CLIs**. That was the last open item in the MVP definition
-of done. See "The first end-to-end run" below for what it proved and what it did not.
+Milestones 0, 1 and 2 are complete. Every item in the MVP definition of done has live
+evidence behind it, and seven runs have been driven against the real Claude Code and
+Codex CLIs — the last two against a real project, the seventh reaching `COMPLETED`.
+The sections below record what each run established and what it did not.
 
 The spike found two blockers. Both are closed:
 
@@ -53,10 +53,10 @@ Four defects surfaced while wiring this up and are fixed:
 
 ## What has been run against the real CLIs
 
-Two runs, both against throwaway target repositories rather than a real project. Their
-artifacts and logs were deleted during cleanup, so this section and the commits it
-names are what remains of them. Re-running regenerates evidence; it does not restore
-those runs.
+Seven runs. The first five used throwaway repositories built for the run; the last two
+used a real project. Every run's artifacts and logs were deleted during cleanup, so
+this section and the commits it names are what remains of them. Re-running regenerates
+evidence; it does not restore those runs.
 
 ### Run 1 — the happy path
 
@@ -144,7 +144,7 @@ is broken today.
 
 No new defect surfaced. Unlike runs 1 and 2, this path behaved as designed throughout.
 
-### Run 4 — cancellation, and the feature it turned out to need
+### Runs 4 and 5 — cancellation, and the feature it turned out to need
 
 Driving this one started by finding there was nothing to drive. `MVP_SCOPE.md` lists
 cancellation in scope and its definition of done says cancellation is visible, but the
@@ -172,25 +172,61 @@ could not have caught this: it cancels and then waits, where a real run has `wai
 running as its own task. Re-run against the real CLI afterwards, the outcome records
 `termination: "taskkill_tree"`.
 
+### Runs 6 and 7 — a real project, twice
+
+The first five runs used repositories built for the run. Runs 6 and 7 used
+`auto-trade-system`: 420 tracked files, 116 test files, a 283-second suite. Same task
+both times — add unit tests for a module that had none — the same workers, and the same
+repository. The only variable was the orchestrator.
+
+**Run 6 failed, and was right to by its own rules.** Codex produced nine passing tests,
+touched no source file, and reported `claimed_passed: false`. Verification ran the full
+suite, the suite was red, the run ended `FAILED_PERMANENT`. The work was correct and the
+system said otherwise, because "does this repository's suite pass" was never the question
+worth asking.
+
+Four things a toy repository could not have shown came out of it, recorded in
+`docs/BACKLOG.md` item 1. The one that matters architecturally: the suite asserts on
+`frontend/dist`, which `frontend/.gitignore` excludes, so five tests pass in the
+developer's checkout and fail in any worktree. **A worktree is not equivalent to a
+checkout** for a project with a build step, and nothing in ADR-005 says so.
+
+**Run 7 reached `COMPLETED`.** With verification judged against the base revision
+(`1314db0`), the same red suite produced `verified: true`, `baseline: [1]`,
+`regressions: []` and a reason naming why. The suite was still red, the worker still said
+so in `claimed_passed: false`, and all of those facts sit in one artifact rather than one
+being smoothed away. The review returned `pass` and recorded that it had no shell tool,
+so it did not claim to have run anything.
+
+That is the MVP demonstrated on work someone actually wanted done, rather than on a
+repository built to be demonstrated on.
+
+One thing to know: `analyze` reads the primary checkout, including uncommitted and
+untracked files, while `implement` gets a worktree from `HEAD`. In run 7 the analyst
+planned around a file that existed only as an untracked change. Nothing went wrong —
+the implementer wrote that file itself — but the two nodes were reasoning about
+different repositories. `docs/BACKLOG.md` item 8.
+
 ### Still unevidenced
 
-A verification failure, a review returning `request_changes` and a containment violation
-have unit coverage and no live run behind them. Each needs a worker to fail in a
-particular way, and the runs so far suggest that is hard to arrange with workers that
-report honestly — run 2's implementer declined a loophole it had been shown and reported
-`blocked` instead. All runs used toy repositories, not a real project.
+A review returning `request_changes` and a containment violation have unit coverage and
+no live run behind them. Each needs a worker to fail in a particular way, and seven runs
+suggest that is hard to arrange with workers that report honestly — run 2's implementer
+declined a loophole it had been shown and reported `blocked` instead, and run 7's
+reviewer passed work that deserved to pass.
 
 ## Recommended next action
 
-Run the pipeline against a real project rather than a toy repository. Every run so far
-used a repository built for the run, small enough that the analysis fits in one pass and
-the implementation is a single file. A real checkout is where context size, existing
-conventions and a test suite that takes minutes rather than milliseconds start to
-matter, and none of that has been observed.
+Decide what the next milestone is. Milestone 2 is complete, every item in the MVP
+definition of done has live evidence, and run 7 carried real work through a real project
+to `COMPLETED`. There is no M3 defined anywhere in these documents, so the next thing to
+build is a choice rather than a continuation — ADR-009 puts the dashboard after core
+reliability, and core reliability is now demonstrated rather than asserted.
 
-The paths still unevidenced are better reached opportunistically than staged: a
-verification failure and a review asking for changes will happen on their own once the
-work is large enough to get wrong.
+`docs/BACKLOG.md` holds what is left. Nothing in it blocks a milestone; the items are
+evidence still to gather, decisions with no deadline, and one standing task. Use the
+orchestrator on real work and the remaining unevidenced paths will arrive on their own —
+they have resisted every attempt to stage them.
 
 Keep `workers/opencode.py` a placeholder.
 

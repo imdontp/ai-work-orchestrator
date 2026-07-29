@@ -9,27 +9,36 @@ those are decisions recorded in `docs/MVP_SCOPE.md`, not debt. Listing them here
 make settled choices read as unfinished work.
 
 Status as of the last update: Milestone 2 is complete, every item in the MVP definition
-of done has live evidence behind it, and six runs have been driven against the real
-Claude Code and Codex CLIs — the sixth against a real project. `docs/START_HERE.md`
-records what each run established.
+of done has live evidence behind it, and seven runs have been driven against the real
+Claude Code and Codex CLIs. The seventh carried a task through a real project to
+`COMPLETED`. `docs/START_HERE.md` records what each run established.
 
 ---
 
-## 1. Run the pipeline against a real project — first attempt done
+## 1. Run the pipeline against a real project — done
 
-Run 6 carried a task through `auto-trade-system` (420 tracked files, 116 test files,
-a 283-second suite): add unit tests for `src/research/splits.py`, which had none.
+**Closed by run 7.** The same task, repository and workers as run 6; the only variable
+was the orchestrator. Run 6 ended `FAILED_PERMANENT` because the target's suite was
+already red. Run 7, with verification judged against the base revision (item 2), reached
+`COMPLETED`.
 
-**The work itself was correct.** Codex wrote `tests/test_splits.py` — nine tests, all
-passing, no source file touched — and reported `claimed_passed: false` because the full
-suite was red for reasons that had nothing to do with it. The file has been kept.
+Verification recorded `verified: true` with `baseline: [1]`, `regressions: []` and the
+reason `commands failed on the base revision too; no regression detected` — the suite
+was still red, the worker still said so in `claimed_passed: false`, and all four facts
+sit in one artifact rather than one of them being smoothed away.
 
-**The run still ended `FAILED_PERMANENT`,** because verification ran the full suite and
-the full suite does not pass. That is the finding, and it is bigger than the run: see
-item 2.
+The review returned `pass` at confidence 0.9 with an info finding naming the frontend
+build as why the suite is not green, and recorded that it had no shell tool so it did
+not claim to have run anything. The produced `tests/test_splits.py` passes; the primary
+checkout was untouched.
 
-Four things a toy repository could never have shown, all found before the pipeline even
-started:
+Both runs targeted `auto-trade-system` — 420 tracked files, 116 test files, a
+283-second suite — with the task: add unit tests for `src/research/splits.py`, which had
+none. Run 6's output was kept and is the file that now sits untracked in that
+repository.
+
+Four things a toy repository could never have shown, all found before run 6's pipeline
+even started:
 
 - **The suite takes 283 seconds.** `runner_config()` hardcodes
   `VerificationCommand(timeout_seconds=600)`, so this project has a factor of two in
@@ -50,17 +59,24 @@ repository's own import convention over the one the task text specified, and fla
 testing pitfalls (unstable sort on duplicate timestamps, `reset_index` breaking a naive
 `DataFrame.equals`) that the task had not mentioned.
 
-**Still to do:** run a task whose verification can actually pass, so the pipeline is
-observed reaching `COMPLETED` on a real project rather than failing on the repository's
-own state. That needs item 2 settled first.
+**What is still unknown at real size:** run 7 used no deselect list, so verification was
+the plain suite and the baseline absorbed the pre-existing failures. What has not been
+tried is a project whose suite runs longer than the hardcoded 600-second command
+timeout, or a task large enough to push the analysis past the inline artifact limit.
+Neither is a blocker; both are simply unmeasured.
 
-## 2. Verification is only meaningful against a deterministic suite
+## 2. Verification is judged against the base revision — settled
 
 Item 2 used to read "get live evidence for a verification failure". Run 6 supplied it —
 `verification_finished` recorded `passed: false` twice, the run did not reach
 `COMPLETED`, and the repair budget bounded it. Rule 5 works.
 
-What it also showed is that **the runner cannot tell "the worker broke it" from "this
+**Settled in `1314db0`,** and proven in run 7: a failing command only fails the run when
+it was not already failing on the base revision. The baseline is taken lazily, once per
+run, and compared per command rather than per test. See the commit for why each of those
+three was chosen and what each costs.
+
+What run 6 showed is that **the runner cannot tell "the worker broke it" from "this
 suite was already broken"**, and in run 6 it was the second. The worker did correct work
 and the run failed. Two distinct causes, both outside the worker's control:
 
@@ -72,15 +88,15 @@ and the run failed. Two distinct causes, both outside the worker's control:
 
 Deselecting known failures, as run 6 did, is a workaround that has to be maintained by
 hand and is easy to get wrong: the deselect list for run 6 was built from a truncated
-log and missed one, which then failed verification.
+log and missed one, which then failed verification. Run 7 needed no deselect list at
+all.
 
-The decision to make: what the orchestrator should require of a project before it will
-believe a verification result, and what it should do when the answer is "this suite is
-not trustworthy". Options include recording a baseline of known failures at run start
-and comparing against it, rather than requiring green.
-
-**Done when:** the position is decided and written down, and a real project run reaches
-`COMPLETED` through verification that means something.
+**What remains open, deliberately:** the comparison is per command, so a command that
+was already red can hide a new failure inside itself. Test-level comparison would close
+that, and would require the verifier to parse a specific framework's output — which is
+the knowledge `execution/verifier.py` exists to avoid holding. The trade is recorded in
+the contract and in the function's docstring rather than resolved. Revisit it if a run
+is ever seen passing while carrying a real regression inside an already-failing command.
 
 ## 3. Live evidence for a review returning `request_changes`
 
@@ -88,9 +104,14 @@ The independent reviewer has only ever returned `pass` in a live run. The branch
 a review verdict into a repair round is covered by tests and by the wording fix in
 `56c5972`, but has never been driven by a real reviewer.
 
-Needs an implementation that passes verification and still has something a reviewer
-would object to. Run 6 never reached the review node at all — verification failed first
-and consumed the repair budget — so this is blocked behind item 2 in practice.
+Needs an implementation that passes verification and still has something a reviewer would
+object to. Run 6 never reached the review node at all, because verification failed first
+and consumed the repair budget; item 2 removed that obstacle and run 7 got there — and
+the reviewer passed work that deserved to pass, which is the correct outcome and not the
+one this item needs.
+
+So this stays open by its nature rather than by a blocker. It arrives when a real task
+produces something defensible enough to verify and weak enough to object to.
 
 **Done when:** the repair reason names the review node, the implementation replays in
 the same worktree, and the repair budget bounds it.
@@ -169,3 +190,29 @@ Evidence on file was recorded against **Claude Code 2.1.220** and **codex-cli 0.
 
 **Done when:** the spike has been re-recorded and the live suite passes against the new
 versions.
+
+## 8. Decide what a read-only node should see: the checkout or the base revision
+
+Observed in run 7.
+
+`_resolve_workspace` gives a read-only node with no write-node dependency the primary
+checkout — which includes uncommitted and untracked files. A write node gets a worktree
+created from `HEAD`, which does not.
+
+In run 7 the analyst read a `tests/test_splits.py` that existed only as an untracked file
+in the developer's checkout, and planned around it. The implementer, working from `HEAD`,
+never saw that file. The outcome matched anyway because the implementer wrote it itself,
+but the two nodes were reasoning about different repositories.
+
+Why it matters: an analysis can plan against work in progress that the implementer will
+never receive, and the resulting plan reads as though it were about the committed state.
+
+The options are narrow. Point read-only nodes at a worktree from the same `base_ref` the
+write node will use, so every node sees one state. Or keep the current behaviour and say
+in the analyst's prompt that it is looking at a working tree which may differ from what
+the implementer receives.
+
+Not urgent — it produced no wrong result in run 7. Recorded because it is the kind of
+thing that produces a baffling artifact months later.
+
+**Done when:** the choice is made and either the code or the prompt reflects it.
