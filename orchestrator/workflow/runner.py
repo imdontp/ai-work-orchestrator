@@ -408,26 +408,118 @@ class WorkflowRunner:
                 self.config.verification_commands, result.command_results, strict=False
             )
         ]
+        # A command that already failed on the base revision proves nothing about this
+        # run's work, so it does not fail the run. A command that passed before and
+        # fails now does. With no baseline to compare against, a failure stays a
+        # failure - that is the safe reading when nothing is known.
+        regressions: list[dict[str, Any]] = []
+        passed = result.passed
+        if not result.passed:
+            baseline = await self._verification_baseline(record, node)
+            if baseline is None:
+                regressions = commands
+            else:
+                regressions = _regressions(commands, baseline)
+                passed = regressions == []
+
         self._event(
             record,
             "verification_finished",
             node_id=node.id,
-            detail={"passed": result.passed, "claimed_passed": claimed},
+            detail={
+                "passed": passed,
+                "claimed_passed": claimed,
+                "regressions": len(regressions) if not result.passed else 0,
+            },
         )
 
-        artifact = {
+        artifact: dict[str, Any] = {
             "schema_version": "1.0",
-            "verified": result.passed,
+            "verified": passed,
             "claimed_passed": claimed,
             "commands": commands,
         }
         if not result.passed:
+            artifact["baseline"] = record.verification_baseline
+            artifact["regressions"] = regressions
+            if passed:
+                # Green would be a lie: nothing regressed, but the suite is red and
+                # this run has not shown that its own work is sound.
+                artifact["reason"] = (
+                    "commands failed on the base revision too; no regression detected"
+                )
+        if not passed:
             return NodeOutcome(
                 artifact=artifact,
                 failed=True,
-                failure_reason="verification commands failed",
+                failure_reason=(
+                    f"verification regressed {len(regressions)} command(s)"
+                    if record.verification_baseline is not None
+                    else "verification commands failed"
+                ),
             )
         return NodeOutcome(artifact=artifact)
+
+    async def _verification_baseline(
+        self, record: RunRecord, node: WorkflowNode
+    ) -> list[int] | None:
+        """Exit codes for the same commands on the untouched base revision.
+
+        Captured only when verification has already failed, and only once per run. A
+        run whose checks pass has no question to answer, and on a real project the
+        baseline costs a full suite - 283 seconds on the first one this was driven
+        against. The base revision does not move, so repair rounds reuse the answer.
+
+        Returns None when no baseline can be taken, which leaves the caller to treat a
+        failure as a failure - the safe reading when nothing is known.
+        """
+        if record.verification_baseline is not None:
+            return record.verification_baseline
+        if record.worktree is None:
+            return None
+
+        base_ref = record.worktree["base_ref"]
+        try:
+            pristine = self.worktrees.create(
+                f"{record.run_id}-baseline", base_ref=base_ref
+            )
+        except WorktreeError as exc:
+            self._event(
+                record, "baseline_unavailable", node_id=node.id, detail={"reason": str(exc)}
+            )
+            return None
+
+        try:
+            self._event(
+                record, "baseline_started", node_id=node.id, detail={"base_ref": base_ref}
+            )
+            result = await self.verifier.run(
+                commands=self.config.verification_commands,
+                workspace=pristine.path,
+                output_dir=self.store.log_dir(record.run_id) / "baseline",
+            )
+            baseline = [process.exit_code for process in result.command_results]
+            # The runner stops at the first failing command, so a shorter baseline than
+            # the command list means the rest were never reached. Pad with the failure
+            # so a later comparison cannot read "was passing" from a missing entry.
+            while len(baseline) < len(self.config.verification_commands):
+                baseline.append(baseline[-1] if baseline else 1)
+            record.verification_baseline = baseline
+            self.store.save(record)
+            self._event(
+                record, "baseline_finished", node_id=node.id, detail={"exit_codes": baseline}
+            )
+            return baseline
+        finally:
+            try:
+                self.worktrees.cleanup(pristine, force=True)
+            except WorktreeError as exc:
+                self._event(
+                    record,
+                    "baseline_cleanup_failed",
+                    node_id=node.id,
+                    detail={"reason": str(exc)},
+                )
 
     # -- request construction ----------------------------------------------------
 
@@ -925,6 +1017,26 @@ def _claimed_passed(artifacts: dict[str, Any]) -> bool | None:
             if isinstance(verification, dict) and "claimed_passed" in verification:
                 return bool(verification["claimed_passed"])
     return None
+
+
+def _regressions(
+    commands: list[dict[str, Any]], baseline: list[int]
+) -> list[dict[str, Any]]:
+    """Commands failing now that were not failing on the base revision.
+
+    Compared per command rather than per test. Test-level comparison would need the
+    runner to parse a specific test framework's output, and `execution/verifier.py`
+    takes an argv list and reads an exit code precisely so it does not have to know
+    what it is running. The cost is real: a command that was already red hides a new
+    failure inside itself. That is recorded in the artifact rather than papered over.
+    """
+    regressed = []
+    for index, command in enumerate(commands):
+        failed_now = command["exit_code"] != 0 or command["timed_out"]
+        failed_before = index < len(baseline) and baseline[index] != 0
+        if failed_now and not failed_before:
+            regressed.append(command)
+    return regressed
 
 
 def _change_request_reason(node: WorkflowNode, artifact: Any) -> str | None:

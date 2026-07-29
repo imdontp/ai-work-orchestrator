@@ -17,8 +17,26 @@
       "const": "1.0"
     },
     "verified": {
-      "description": "Every configured command ran and exited zero. False when any failed, timed out, or when no commands were configured at all.",
+      "description": "True when nothing regressed: either every command exited zero, or the commands that failed were already failing on the base revision. False when a command that passed on the base revision now fails, when no baseline could be taken to judge against, or when no commands were configured at all. Note that true does not imply a green suite - see reason and baseline.",
       "type": "boolean"
+    },
+    "baseline": {
+      "description": "Exit code per command on the untouched base revision, captured only when verification failed and only once per run. Null when no baseline was needed or none could be taken; a failure with no baseline is treated as a failure.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "integer"
+      }
+    },
+    "regressions": {
+      "description": "The commands failing now that were not failing on the base revision. Empty alongside a failing command list means the repository was already red there. Compared per command, not per test: the verifier reads exit codes and does not parse any test framework's output, so a command that was already red can hide a new failure inside itself.",
+      "type": "array",
+      "items": {
+        "type": "object"
+      },
+      "default": []
     },
     "claimed_passed": {
       "description": "What the worker said about its own verification, from worker-result.verification.claimed_passed. Recorded next to the mechanical result so the two can be compared. Null when the worker made no claim.",

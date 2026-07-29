@@ -79,6 +79,11 @@ class RunRecord(BaseModel):
     sessions: dict[str, str] = Field(default_factory=dict)
     #: Serialized Worktree, when one was created for this run.
     worktree: dict[str, str] | None = None
+    #: Exit code per verification command on the untouched base revision, captured the
+    #: first time verification fails. Absent while verification passes, because a run
+    #: that never fails has no question to answer and the baseline costs a full suite.
+    #: Kept on the record so repair rounds reuse it - the base revision does not move.
+    verification_baseline: list[int] | None = None
 
     @property
     def is_terminal(self) -> bool:

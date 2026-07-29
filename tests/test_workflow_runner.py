@@ -616,13 +616,16 @@ def test_a_correct_identity_produces_no_correction_event(harness) -> None:
 
 
 def test_verification_is_rerun_and_can_contradict_the_worker(tmp_path, harness) -> None:
-    """claimed_passed is recorded, then ignored in favour of a real command."""
+    """claimed_passed is recorded, then ignored in favour of a real command.
+
+    The command passes on the base revision and fails once the worker has edited a
+    tracked file, so this is a regression the run must not survive.
+    """
     runner, claude, codex, store = harness
     runner.config.verification_commands = [
-        VerificationCommand(
-            args=["git", "rev-parse", "--verify", "no-such-ref"], timeout_seconds=60
-        )
+        VerificationCommand(args=["git", "diff", "--exit-code"], timeout_seconds=60)
     ]
+    codex.writes = {"calc.py": "def add(a, b):\n    return a - b\n"}
     claude.queue(structured_result={"plan": []})
     codex.queue(
         structured_result={
@@ -639,6 +642,107 @@ def test_verification_is_rerun_and_can_contradict_the_worker(tmp_path, harness) 
     assert "verification_finished" in _kinds(store, "RUN-1")
     assert record.repair_rounds >= 1
     assert record.task_state is not TaskState.COMPLETED
+
+
+def test_a_command_already_failing_on_the_base_revision_is_not_this_runs_fault(
+    harness,
+) -> None:
+    """A real project run failed this way: correct work, a suite that was already red."""
+    runner, claude, codex, store = harness
+    runner.config.verification_commands = [
+        VerificationCommand(
+            args=["git", "rev-parse", "--verify", "no-such-ref"], timeout_seconds=60
+        )
+    ]
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    kinds = _kinds(store, "RUN-1")
+    assert "baseline_started" in kinds and "baseline_finished" in kinds
+    assert record.verification_baseline is not None
+    assert record.verification_baseline[0] != 0
+
+    artifact = store.read_artifact("RUN-1", record.artifacts["verify"])
+    assert artifact["verified"] is True
+    assert artifact["regressions"] == []
+    # The command still failed. "verified" must not be read as "the suite is green".
+    assert artifact["commands"][0]["exit_code"] != 0
+    assert "no regression" in artifact["reason"]
+    # The run was not sent round the repair loop for a failure it did not cause.
+    assert record.repair_rounds == 0
+
+
+def test_the_baseline_is_taken_once_and_reused(harness) -> None:
+    """The base revision does not move, and on a real project it costs a full suite."""
+    runner, claude, codex, store = harness
+    runner.config.verification_commands = [
+        VerificationCommand(args=["git", "diff", "--exit-code"], timeout_seconds=60)
+    ]
+    codex.writes = {"calc.py": "def add(a, b):\n    return a - b\n"}
+    claude.queue(structured_result={"plan": []})
+    for _ in range(4):
+        codex.queue(structured_result={"status": "completed"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    starts = [k for k in _kinds(store, "RUN-1") if k == "baseline_started"]
+    assert record.repair_rounds >= 1, "the run should have gone round more than once"
+    assert len(starts) == 1, f"baseline taken {len(starts)} times"
+
+
+def test_a_failure_with_no_baseline_stays_a_failure(harness) -> None:
+    """Nothing known means no excuse. The safe reading of a failure is a failure."""
+    runner, claude, codex, store = harness
+    runner.config.verification_commands = [
+        VerificationCommand(
+            args=["git", "rev-parse", "--verify", "no-such-ref"], timeout_seconds=60
+        )
+    ]
+
+    async def no_baseline(record, node):
+        return None
+
+    runner._verification_baseline = no_baseline  # type: ignore[method-assign]
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    assert record.repair_rounds >= 1
+    assert record.task_state is not TaskState.COMPLETED
+
+
+def test_the_baseline_worktree_does_not_outlive_the_check(harness, tmp_path) -> None:
+    """It is a scratch checkout, not a deliverable; leaving it strands a locked tree."""
+    runner, claude, codex, store = harness
+    runner.config.verification_commands = [
+        VerificationCommand(
+            args=["git", "rev-parse", "--verify", "no-such-ref"], timeout_seconds=60
+        )
+    ]
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    runner.create_run("RUN-1")
+    asyncio.run(runner.advance("RUN-1"))
+    runner.decide("RUN-1", "approve")
+    asyncio.run(runner.advance("RUN-1"))
+
+    assert "baseline_finished" in _kinds(store, "RUN-1")
+    assert not (tmp_path / "workspaces" / "RUN-1-baseline").exists()
 
 
 def test_the_verification_artifact_conforms_to_its_published_contract(harness) -> None:
