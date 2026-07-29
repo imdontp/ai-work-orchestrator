@@ -17,7 +17,12 @@ import pytest
 from execution.verifier import VerificationCommand
 from orchestrator.domain.models import Task, TaskPermissions, TaskState
 from orchestrator.workflow.definition import WorkflowDefinition
-from orchestrator.workflow.runner import RunnerConfig, WorkflowRunError, WorkflowRunner
+from orchestrator.workflow.runner import (
+    MAX_LISTED_CHANGES,
+    RunnerConfig,
+    WorkflowRunError,
+    WorkflowRunner,
+)
 from orchestrator.workflow.store import FilesystemRunStore, RunStore
 from workers.base import (
     WorkerAdapter,
@@ -111,7 +116,9 @@ class FakeAdapter(WorkerAdapter):
         self.requests.append(request)
         self._counter += 1
         for name, content in self.writes.items():
-            (request.workspace / name).write_text(content, encoding="utf-8")
+            destination = request.workspace / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(content, encoding="utf-8")
         if self.escape_write is not None:
             self.escape_write.write_text("ESCAPED", encoding="utf-8")
         return WorkerHandle(worker_run_id=f"{self.name}-{self._counter}", process_id=1000)
@@ -494,11 +501,12 @@ def test_nodes_with_a_published_contract_get_it_as_an_output_schema(harness) -> 
 # ---------------------------------------------------------------------------
 
 
-def _run_to_completion(runner, store) -> None:
+def _run_to_completion(runner):
+    """Drive RUN-1 through the plan gate to the final one, and return where it stopped."""
     runner.create_run("RUN-1")
     asyncio.run(runner.advance("RUN-1"))
     runner.decide("RUN-1", "approve")
-    asyncio.run(runner.advance("RUN-1"))
+    return asyncio.run(runner.advance("RUN-1"))
 
 
 def test_the_runner_overwrites_identity_fields_the_worker_got_wrong(harness) -> None:
@@ -516,7 +524,7 @@ def test_the_runner_overwrites_identity_fields_the_worker_got_wrong(harness) -> 
     )
     claude.queue(structured_result={"verdict": "pass"})
 
-    _run_to_completion(runner, store)
+    _run_to_completion(runner)
 
     implemented = store.read_artifact("RUN-1", "implement-worker-result.json")
     assert implemented["worker"] == "codex"
@@ -531,7 +539,7 @@ def test_a_corrected_identity_is_recorded_rather_than_silently_replaced(harness)
     codex.queue(structured_result={"status": "completed", "worker": "/root"})
     claude.queue(structured_result={"verdict": "pass"})
 
-    _run_to_completion(runner, store)
+    _run_to_completion(runner)
 
     corrections = [
         event for event in store.read_events("RUN-1") if event.kind == "identity_corrected"
@@ -548,7 +556,7 @@ def test_an_identity_field_the_contract_omits_is_not_invented(harness) -> None:
     codex.queue(structured_result={"status": "completed"})
     claude.queue(structured_result={"verdict": "pass"})
 
-    _run_to_completion(runner, store)
+    _run_to_completion(runner)
 
     analysis = store.read_artifact("RUN-1", "analyze-analysis.json")
     assert analysis["task_id"] == "TASK-001"
@@ -564,7 +572,7 @@ def test_without_a_contract_only_fields_the_worker_supplied_are_corrected(harnes
     codex.queue(structured_result={"status": "completed", "worker": "/root"})
     claude.queue(structured_result={"verdict": "pass"})
 
-    _run_to_completion(runner, store)
+    _run_to_completion(runner)
 
     implemented = store.read_artifact("RUN-1", "implement-worker-result.json")
     assert implemented["worker"] == "codex"
@@ -588,7 +596,7 @@ def test_a_correct_identity_produces_no_correction_event(harness) -> None:
         structured_result={"verdict": "pass", "task_id": "TASK-001", "run_id": "RUN-1"}
     )
 
-    _run_to_completion(runner, store)
+    _run_to_completion(runner)
 
     assert "identity_corrected" not in _kinds(store, "RUN-1")
 
@@ -827,6 +835,57 @@ def test_the_approval_package_distinguishes_commits_from_dirty_files(harness) ->
 
     changes = record.pending_approval.changes
     assert any("uncommitted change" in entry for entry in changes), changes
+
+
+def test_the_approval_package_names_the_dirty_files(harness) -> None:
+    """A count alone is not something a human can decide on."""
+    runner, claude, codex, _ = harness
+    codex.writes = {"new_file.py": "print('work')\n"}
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    record = _run_to_completion(runner)
+
+    changes = record.pending_approval.changes
+    assert any("new_file.py" in entry for entry in changes), changes
+
+
+def test_the_named_files_expose_noise_the_count_hid(harness) -> None:
+    """The first live run's "3 uncommitted change(s)" was one file and two caches."""
+    runner, claude, codex, _ = harness
+    codex.writes = {
+        "slugify.py": "def slugify(text): return text\n",
+        "__pycache__/slugify.cpython-312.pyc": "x",
+        "tests/__pycache__/test_slugify.cpython-312.pyc": "x",
+    }
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    record = _run_to_completion(runner)
+
+    changes = record.pending_approval.changes
+    named = " ".join(changes)
+    assert "slugify.py" in named, changes
+    # The caches are still reported - hiding a real write to make a number look
+    # tidier is the worse failure - but a reader can now tell them apart.
+    assert "__pycache__" in named, changes
+
+
+def test_a_long_change_list_is_summarised_rather_than_dumped(harness) -> None:
+    runner, claude, codex, _ = harness
+    codex.writes = {f"file_{index:03d}.py": "x\n" for index in range(MAX_LISTED_CHANGES + 5)}
+    claude.queue(structured_result={"plan": []})
+    codex.queue(structured_result={"status": "completed"})
+    claude.queue(structured_result={"verdict": "pass"})
+
+    record = _run_to_completion(runner)
+
+    changes = record.pending_approval.changes
+    listed = [entry for entry in changes if ".py" in entry]
+    assert len(listed) == MAX_LISTED_CHANGES, len(listed)
+    assert any("and 5 more" in entry for entry in changes), changes
 
 
 def test_a_terminal_run_releases_its_worktree(harness) -> None:

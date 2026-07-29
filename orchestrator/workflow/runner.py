@@ -54,6 +54,11 @@ from orchestrator.workflow.store import (
 from workers.base import WorkerAdapter, WorkerRequest, WorkerResult
 from workers.cli_base import extract_json
 
+#: Dirty paths named individually in an approval package before the rest are summarised.
+#: A human reads this list to decide; past that many, the list stops informing the
+#: decision and the count carries the rest.
+MAX_LISTED_CHANGES = 20
+
 
 class WorkflowRunError(RuntimeError):
     """The run cannot proceed and the caller must intervene."""
@@ -639,6 +644,13 @@ class WorkflowRunner:
         A live run had the worker edit files without committing, while the approval
         package listed the branch as the change — which reads as "there are commits to
         review" when there were none.
+
+        The dirty files are named rather than counted. A bare "3 uncommitted change(s)"
+        is a number a human cannot act on: the first live run's three were one source
+        file and two `__pycache__` directories, which reads as three times the work it
+        was. Nothing is filtered out — `git status --porcelain` already omits ignored
+        files, and deciding for a human which of the remainder are noise would hide
+        real writes. Naming them lets the reader see the noise for what it is.
         """
         if record.worktree is None:
             return []
@@ -656,9 +668,15 @@ class WorkflowRunner:
         if commits:
             changes.extend(f"{branch}: {line}" for line in commits.splitlines())
         if uncommitted:
+            entries = uncommitted.splitlines()
             changes.append(
-                f"{branch}: {len(uncommitted.splitlines())} uncommitted change(s) in the worktree"
+                f"{branch}: {len(entries)} uncommitted change(s) in the worktree"
             )
+            shown = entries[:MAX_LISTED_CHANGES]
+            changes.extend(f"{branch}:   {entry.strip()}" for entry in shown)
+            remaining = len(entries) - len(shown)
+            if remaining:
+                changes.append(f"{branch}:   ... and {remaining} more")
         if not changes:
             changes.append(f"{branch}: no commits and no file changes")
         return changes
