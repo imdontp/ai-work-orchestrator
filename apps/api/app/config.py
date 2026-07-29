@@ -27,6 +27,40 @@ class Settings(BaseSettings):
     allow_network_access: bool = False
     allow_git_push: bool = False
 
+    #: The repository workers operate on. Unset means the API can describe itself but
+    #: cannot start a run - which is the honest default, since guessing a checkout to
+    #: point agents at is not a decision to make implicitly.
+    project_root: Path | None = None
+    #: Workflow graph a submitted task is run through.
+    workflow_path: Path = REPO_ROOT / "workflows" / "analyze-implement-review.yaml"
+    prompt_root: Path = REPO_ROOT / "prompts"
+    contracts_root: Path = REPO_ROOT / "contracts"
+    #: Commands re-run mechanically after a write node, as argv lists. Empty means a
+    #: run proves nothing and the verify node fails; see WorkflowRunner.
+    #: VERIFICATION_COMMANDS='[["python","-m","pytest","-q"]]'
+    verification_commands: list[list[str]] = Field(default_factory=list)
+    #: Model per worker requirement, e.g. WORKER_MODELS='{"claude_code":"sonnet"}'.
+    #: Keyed because a model name means something to exactly one provider.
+    worker_models: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("project_root")
+    @classmethod
+    def project_root_must_not_be_this_repository(cls, value: Path | None) -> Path | None:
+        """Refuse to point workers at the orchestrator's own checkout.
+
+        Workers write to a worktree of whatever PROJECT_ROOT names, and the escape
+        detection in ADR-010 treats that repository as the protected root. Aiming it
+        at this repository would put the control plane inside its own blast radius.
+        """
+        if value is None:
+            return None
+        resolved = value.expanduser().resolve()
+        if resolved == REPO_ROOT:
+            raise ValueError(
+                f"PROJECT_ROOT must not be the orchestrator's own repository ({REPO_ROOT})"
+            )
+        return resolved
+
     @field_validator("worktree_root")
     @classmethod
     def worktree_root_must_be_outside_the_checkout(cls, value: Path) -> Path:

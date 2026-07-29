@@ -46,6 +46,11 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.flake8-bugbear]
+# `Depends(...)` in a default is how FastAPI declares a dependency; B008 exists for
+# accidental mutable defaults, which this is not.
+extend-immutable-calls = ["fastapi.Depends"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
