@@ -1,4 +1,4 @@
-.PHONY: install dev test test-live spike lint typecheck validate run postgres-up postgres-down
+.PHONY: install dev test test-live test-posix spike lint typecheck validate run postgres-up postgres-down
 
 install:
 	python -m pip install -e .
@@ -13,6 +13,12 @@ test:
 # authenticated machine, so it is deliberately not part of `make test`.
 test-live:
 	AIWO_LIVE_TESTS=1 pytest tests/test_worker_adapters_live.py -v
+
+# Exercise the POSIX branches of ProcessManager and WriteBarrier on real Linux. The
+# target machine is Windows with no WSL distribution, so a container is the only way
+# to run them at all. Needs Docker and, from Windows, Git Bash rather than PowerShell.
+test-posix:
+	bash scripts/verify_posix.sh
 
 # Re-record CLI behaviour after an upgrade. Needs a disposable repo to work in.
 spike:

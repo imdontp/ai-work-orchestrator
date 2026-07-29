@@ -85,3 +85,14 @@ installed. Choosing it would have blocked M2 on an environment change.
 
 **Consequence:** `WORKTREE_ROOT` may no longer point inside the repository. The
 in-repo `worktrees/` directory is retained only as a signpost; see its README.
+
+**Amendment — the barrier proves itself.** Running the POSIX branch on real Linux
+showed the barrier silently doing nothing: as root, `chmod` succeeds and the directory
+stays writable, because root ignores mode bits. That is how containers and most CI
+run, so the prevention layer would have been absent exactly where it was most likely
+to be trusted. `WriteBarrier.apply()` now writes a probe file after applying the rule
+and raises if it lands, releasing the useless rule first. A barrier either holds or
+refuses to claim it does; there is no state where it reports success and is porous.
+
+The orchestrator must not run as root on POSIX. Detection still works there, but
+prevention does not, and `arm()` will refuse rather than proceed on one layer.

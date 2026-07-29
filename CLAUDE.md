@@ -34,7 +34,25 @@ Endpoints once running: `http://127.0.0.1:8000/health`, `/docs`, `/api/v1/system
 
 ### Platform note
 
-The target machine is native Windows with **no WSL distribution installed**, so that is the only path that has actually been exercised. `execution/process_manager.py` dispatches on platform: `CREATE_NEW_PROCESS_GROUP` + `taskkill /F /T` on Windows, `SIGTERM`/`SIGKILL` to the process group on POSIX. The POSIX branch has never run against a real process group here — its tests substitute the syscalls. Same caveat for `WriteBarrier`'s mode-bit path in `execution/workspace_guard.py`. Verify on Linux before claiming either works there.
+The target machine is native Windows with **no WSL distribution installed**. `execution/process_manager.py` dispatches on platform: `CREATE_NEW_PROCESS_GROUP` + `taskkill /F /T` on Windows, `SIGTERM`/`SIGKILL` to the process group on POSIX; `WriteBarrier` uses `icacls` deny aces on Windows and mode bits on POSIX.
+
+The POSIX branches are exercised in a Linux container rather than left as "should work":
+
+```bash
+bash scripts/verify_posix.sh        # process manager, workspace guard, worktree manager
+```
+
+Run it from Git Bash, not PowerShell — PowerShell resolves `bash` to WSL, which has no distribution. Behind a TLS-inspecting proxy the container cannot reach PyPI; export the host trust store to `.ca-bundle.pem` (gitignored) and the script mounts it rather than disabling certificate verification:
+
+```powershell
+$sb = New-Object System.Text.StringBuilder
+Get-ChildItem Cert:\LocalMachine\Root, Cert:\CurrentUser\Root | ForEach-Object {
+  [void]$sb.AppendLine("-----BEGIN CERTIFICATE-----")
+  [void]$sb.AppendLine([Convert]::ToBase64String($_.RawData, 'InsertLineBreaks'))
+  [void]$sb.AppendLine("-----END CERTIFICATE-----")
+}
+[System.IO.File]::WriteAllText(".ca-bundle.pem", $sb.ToString())
+```
 
 ## Architecture
 

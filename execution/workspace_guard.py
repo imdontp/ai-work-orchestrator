@@ -23,6 +23,7 @@ Provider-agnostic: nothing here knows which CLI is being contained.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -108,10 +109,35 @@ class WriteBarrier:
         self._previous_mode: int | None = None
 
     def apply(self) -> str:
+        """Apply the barrier, then prove it holds.
+
+        The proof is not ceremony. Running as root on POSIX ignores mode bits entirely,
+        so ``chmod`` returns success and the directory stays writable — which is how
+        containers and most CI run. Reporting ``chmod_ro`` in that case would announce a
+        prevention layer that does not exist, and the run would proceed believing
+        relative escapes were blocked when nothing was blocking them.
+        """
         if not self.directory.is_dir():
             raise ContainmentError(f"barrier directory does not exist: {self.directory}")
         self.mechanism = self._apply_windows() if IS_WINDOWS else self._apply_posix()
+        self._prove_it_holds()
         return self.mechanism
+
+    def _prove_it_holds(self) -> None:
+        probe = self.directory / f".barrier-probe-{os.getpid()}"
+        try:
+            probe.touch()
+        except OSError:
+            return  # Refused, which is the whole point.
+
+        probe.unlink(missing_ok=True)
+        mechanism = self.mechanism
+        # Do not leave a rule in place that we have just shown to be useless.
+        self.release()
+        raise ContainmentError(
+            f"the {mechanism} write barrier on {self.directory} does not hold: a file "
+            f"was still created after it was applied{_root_hint()}"
+        )
 
     def release(self) -> None:
         if self.mechanism == "not_applied":
@@ -156,6 +182,18 @@ class WriteBarrier:
             )
 
 
+def _root_hint() -> str:
+    """Name the usual cause when a POSIX barrier does not hold."""
+    if sys.platform == "win32":
+        return ""
+    if os.geteuid() != 0:
+        return ""
+    return (
+        " — this process is uid 0, and root bypasses mode bits. Run the orchestrator "
+        "as an unprivileged user."
+    )
+
+
 def _current_user() -> str:
     user = os.environ.get("USERNAME") or os.environ.get("USER")
     if not user:
@@ -168,9 +206,19 @@ def _current_user() -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Recorded for a file that exists but cannot be read.
+_UNREADABLE = "unreadable"
+
+#: Read in chunks: a protected root can contain files larger than memory.
+_HASH_CHUNK_BYTES = 1024 * 1024
+
+
 @dataclass(frozen=True)
 class Snapshot:
-    fingerprints: dict[Path, tuple[int, int]] = field(default_factory=dict)
+    #: Path -> content digest. Size and mtime were not enough: a same-size overwrite
+    #: inside one mtime tick read as untouched, which is exactly the edit an escape
+    #: would make if it were trying not to be noticed.
+    fingerprints: dict[Path, str] = field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.fingerprints)
@@ -201,7 +249,7 @@ class EscapeDetector:
         return any(path == allowed or allowed in path.parents for allowed in self.allowed_paths)
 
     def snapshot(self) -> Snapshot:
-        fingerprints: dict[Path, tuple[int, int]] = {}
+        fingerprints: dict[Path, str] = {}
         for root in self.protected_roots:
             if not root.exists():
                 continue
@@ -223,19 +271,25 @@ class EscapeDetector:
                 violations.append(EscapeViolation(path, "deleted"))
         return tuple(sorted(violations, key=lambda v: (v.kind, str(v.path))))
 
-    def _fingerprint_tree(self, root: Path, sink: dict[Path, tuple[int, int]]) -> None:
+    @staticmethod
+    def _fingerprint(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(_HASH_CHUNK_BYTES):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _fingerprint_tree(self, root: Path, sink: dict[Path, str]) -> None:
         for directory, subdirectories, filenames in os.walk(root, onerror=None):
             subdirectories[:] = [d for d in subdirectories if d not in self.excluded_dir_names]
             for filename in filenames:
                 path = Path(directory) / filename
                 try:
-                    stat = path.stat()
+                    sink[path] = self._fingerprint(path)
                 except OSError:
-                    # A file we cannot stat is a file we cannot vouch for. Record it
-                    # with a sentinel so it still shows up as drift if that changes.
-                    sink[path] = (-1, -1)
-                    continue
-                sink[path] = (stat.st_size, stat.st_mtime_ns)
+                    # A file we cannot read is a file we cannot vouch for. Record a
+                    # sentinel so it still shows as drift if that changes.
+                    sink[path] = _UNREADABLE
                 if len(sink) > self.max_files:
                     raise ContainmentError(
                         f"protected tree exceeds {self.max_files} files; "

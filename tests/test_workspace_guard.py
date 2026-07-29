@@ -7,6 +7,7 @@ whether the write succeeded.
 """
 
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,30 @@ from execution.workspace_guard import (
     EscapeDetector,
     WorkspaceContainment,
     WriteBarrier,
+)
+
+
+def _barrier_holds_for_this_user() -> bool:
+    """Can prevention work at all here?
+
+    It cannot for root on POSIX: mode bits are ignored, so `apply()` refuses rather
+    than claim a barrier it cannot enforce. Tests that need a working barrier to
+    exercise something else are skipped instead of asserting a guarantee this user
+    cannot have. Detection tests are unaffected and still run.
+    """
+    with tempfile.TemporaryDirectory() as directory:
+        barrier = WriteBarrier(Path(directory))
+        try:
+            barrier.apply()
+        except ContainmentError:
+            return False
+        barrier.release()
+        return True
+
+
+needs_working_barrier = pytest.mark.skipif(
+    not _barrier_holds_for_this_user(),
+    reason="the write barrier cannot hold for this user (root ignores mode bits)",
 )
 
 
@@ -32,17 +57,48 @@ def _make_layout(tmp_path: Path) -> tuple[Path, Path]:
 # ---------------------------------------------------------------------------
 
 
-def test_barrier_blocks_creation_in_the_barrier_directory(tmp_path: Path) -> None:
-    run_dir, _ = _make_layout(tmp_path)
+def test_barrier_blocks_creation_or_refuses_to_claim_that_it_does(tmp_path: Path) -> None:
+    """Either the barrier holds, or applying it fails. Never "applied" but porous.
 
-    with WriteBarrier(run_dir) as barrier:
+    Observed on real POSIX: running as root, `chmod` succeeds and the directory stays
+    writable, because root ignores mode bits. A barrier that reports success there
+    would announce a prevention layer that is not present.
+    """
+    run_dir, _ = _make_layout(tmp_path)
+    barrier = WriteBarrier(run_dir)
+
+    try:
+        barrier.apply()
+    except ContainmentError as exc:
+        assert "does not hold" in str(exc)
+        # And it must not leave a rule behind that it has just disproved.
+        assert barrier.mechanism == "not_applied"
+        return
+
+    try:
         assert barrier.mechanism in {"icacls_deny", "chmod_ro"}
         with pytest.raises(OSError):
             (run_dir / "escape.txt").write_text("ESCAPED", encoding="utf-8")
+    finally:
+        barrier.release()
 
     assert not (run_dir / "escape.txt").exists()
 
 
+@needs_working_barrier
+def test_the_barrier_probe_leaves_nothing_behind(tmp_path: Path) -> None:
+    run_dir, worktree = _make_layout(tmp_path)
+
+    try:
+        with WriteBarrier(run_dir):
+            pass
+    except ContainmentError:
+        pass
+
+    assert [entry.name for entry in run_dir.iterdir()] == [worktree.name]
+
+
+@needs_working_barrier
 def test_barrier_leaves_the_worktree_writable(tmp_path: Path) -> None:
     """A barrier that also blocks legitimate work is useless."""
     run_dir, worktree = _make_layout(tmp_path)
@@ -56,6 +112,7 @@ def test_barrier_leaves_the_worktree_writable(tmp_path: Path) -> None:
     assert (worktree / "nested" / "deep.txt").read_text() == "work"
 
 
+@needs_working_barrier
 def test_barrier_release_restores_writability(tmp_path: Path) -> None:
     run_dir, _ = _make_layout(tmp_path)
 
@@ -88,6 +145,23 @@ def test_detector_reports_nothing_when_protected_paths_are_untouched(tmp_path: P
     after = detector.snapshot()
 
     assert detector.compare(before, after) == ()
+
+
+def test_detector_notices_a_same_size_overwrite(tmp_path: Path) -> None:
+    """Size and mtime missed this; it is the edit an escape would make to hide."""
+    protected = tmp_path / "checkout"
+    protected.mkdir()
+    target = protected / "config.py"
+    target.write_text("SAFE = True ", encoding="utf-8")
+
+    detector = EscapeDetector([protected])
+    before = detector.snapshot()
+    # Same byte count, and fast enough to land inside one mtime tick.
+    target.write_text("SAFE = False", encoding="utf-8")
+
+    violations = detector.compare(before, detector.snapshot())
+
+    assert [(v.kind, v.path.name) for v in violations] == [("modified", "config.py")]
 
 
 def test_detector_reports_created_modified_and_deleted(tmp_path: Path) -> None:
@@ -140,6 +214,7 @@ def test_detector_refuses_an_oversized_tree(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@needs_working_barrier
 def test_containment_reports_a_clean_run(tmp_path: Path) -> None:
     run_dir, worktree = _make_layout(tmp_path)
     protected = tmp_path / "checkout"
@@ -156,6 +231,7 @@ def test_containment_reports_a_clean_run(tmp_path: Path) -> None:
     assert report.files_scanned == 1
 
 
+@needs_working_barrier
 def test_containment_catches_an_absolute_path_write(tmp_path: Path) -> None:
     """The case the barrier cannot prevent — this is why detection exists."""
     run_dir, worktree = _make_layout(tmp_path)
@@ -201,6 +277,7 @@ def test_containment_requires_arm_before_disarm(tmp_path: Path) -> None:
         containment.disarm()
 
 
+@needs_working_barrier
 def test_containment_releases_the_barrier_even_after_a_violation(tmp_path: Path) -> None:
     run_dir, worktree = _make_layout(tmp_path)
     protected = tmp_path / "checkout"
