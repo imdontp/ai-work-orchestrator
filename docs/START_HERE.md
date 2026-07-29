@@ -50,7 +50,14 @@ Four defects surfaced while wiring this up and are fixed:
 - The `Task` model was missing `constraints`, `scope`, `inputs` and `metadata`, all of
   which `contracts/task.schema.json` has. It now carries the full set.
 
-## The first end-to-end run
+## What has been run against the real CLIs
+
+Two runs, both against throwaway target repositories rather than a real project. Their
+artifacts and logs were deleted during cleanup, so this section and the commits it
+names are what remains of them. Re-running regenerates evidence; it does not restore
+those runs.
+
+### Run 1 — the happy path
 
 A task was submitted over the HTTP API and carried through the shipped workflow against
 the real CLIs: analyze (Claude Code) → plan approval → implement (Codex, in a worktree)
@@ -81,22 +88,74 @@ Three defects surfaced that no unit test had caught, all now fixed:
 - `FilesystemRunStore.save` could fail on a transient Windows file lock, which would
   mark a healthy run failed. The rename now retries.
 
-What the run did **not** exercise: the repair loop, a verification failure, a review
-returning `request_changes`, a containment violation, a timeout, or a cancellation.
-Each of those has unit coverage and none has live evidence. The run also used a toy
-target repository, not a real project.
+### Run 2 — the repair loop and its bound
 
-The run's artifacts and logs were deleted during cleanup, so this section — and the
-three commits above — are what remains of it. Re-running the pipeline regenerates the
-evidence; it does not restore that run.
+The target held a test that reaches the network, which the task was not granted, at a
+domain reserved by RFC 2606 that never resolves. So the suite could not be made to pass
+from inside the run, whatever the implementation did.
+
+Codex was invoked three times. Each time it wrote a correct `slugify.py` and reported
+`status: "blocked"` with `claimed_passed: false` rather than claiming a success it did
+not have — and rather than taking the loophole the analysis had spotted, that
+`conftest.py` and `pytest.ini` sit at the root and are not literally "under `tests/`".
+The run ended `FAILED_PERMANENT` with `repair_rounds: 2`.
+
+What it established:
+
+- The repair loop runs and is bounded. Rounds went `RUNNING → FAILED_RETRYABLE → READY`
+  through the state machine each time, and the third failure ended the run rather than
+  starting a fourth.
+- `containment_armed` was logged on every repair round, not only the first.
+- The identity stamping from run 1 works in the field: Codex reported `run_id` as
+  `TASK-E2E-002-codex-1`, `-2` and `-3` — its own worker run id — and the runner
+  corrected all three.
+
+One defect surfaced, now fixed: every repair event and the final failure read "review
+requested changes" when no review node had run. Both paths into that branch shared one
+hardcoded string. The reason is now derived from the artifact and names the node
+(`56c5972`).
+
+The run also showed why a verification failure is hard to force: `status: "blocked"`
+sends the run to repair before the verify node is reached, so the path where
+`VerificationRunner` contradicts a worker's success claim is still unevidenced.
+
+### Run 3 — a node timeout
+
+`DEFAULT_TASK_TIMEOUT_SECONDS` was set to 5, well under the 40–90 seconds the analyze
+node actually takes, so the worker was certain to be killed mid-flight. It was, three
+times — the initial attempt and both repair rounds — and the run ended
+`FAILED_PERMANENT` with `claude_code failed: exit=1 kind=timeout`.
+
+This is the first live evidence for blocker B1. `ProcessManager` recorded
+`termination: "taskkill_tree"` on all three attempts, which is the Windows branch
+written to replace `os.killpg`; until now only unit tests with stand-in processes had
+exercised it. All three worker PIDs were gone afterwards, with no orphaned process left
+behind.
+
+It also showed the repair loop driving a *failed* node rather than one asking for
+changes — a different branch — and the recorded reason was the real one rather than a
+shared string.
+
+One thing to know rather than fix: a killed worker may or may not have emitted its
+session id first. Two of the three attempts recorded none. Resuming a session after a
+timeout is therefore not dependable; the shipped workflow does not try to, so nothing
+is broken today.
+
+No new defect surfaced. Unlike runs 1 and 2, this path behaved as designed throughout.
+
+### Still unevidenced
+
+A verification failure, a review returning `request_changes`, a containment violation
+and a cancellation have unit coverage and no live run behind them. All three runs used
+toy repositories, not a real project.
 
 ## Recommended next action
 
-Drive the paths the first run skipped, against a real project rather than a toy one:
-a verification that genuinely fails, a review that asks for changes, and a repair round
-that reaches the bound. The happy path is now evidenced; the failure paths are still
-only asserted in tests, and they are the ones that decide whether the system is safe to
-leave running.
+Drive a cancellation — a cancel issued while a worker is running. Like the timeout it
+can be forced directly, where the remaining paths need a worker to fail in a particular
+way, which the runs so far suggest is hard to arrange with workers that report honestly.
+
+After that, run the pipeline against a real project rather than a toy repository.
 
 Keep `workers/opencode.py` a placeholder.
 
@@ -109,8 +168,8 @@ Do not begin the web dashboard yet (ADR-009).
 
 Named here rather than discovered later:
 
-- No live evidence for the repair loop, verification failure, review-requested changes,
-  containment violation, timeout or cancellation. See the section above.
+- No live evidence for a verification failure, review-requested changes, a containment
+  violation or a cancellation. See the section above.
 - The API is unauthenticated. This is deliberate for a single-user local control plane
   and the reasoning is recorded in `docs/SECURITY_POLICY.md`; it is not a gap that has
   been overlooked, and it is a gap that must close before the API leaves localhost.

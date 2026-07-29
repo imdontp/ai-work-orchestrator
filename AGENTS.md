@@ -68,11 +68,21 @@ done. It found three defects that the tests did not: worker-guessed identity fie
 artifacts, an approval package that counted changes instead of naming them, and a
 record rename that a Windows file lock could fail. All three are fixed.
 
-That run exercised the happy path only. The repair loop, a failing verification, a
-review asking for changes, a containment violation, a timeout and a cancellation have
-unit coverage and no live evidence. Driving those is next, against a real project
-rather than the throwaway repository the first run used.
-`docs/START_HERE.md` records what the run established and what it did not.
+A second run drove the repair loop to its bound: the target's suite could not be made to
+pass from inside the run, Codex reported `blocked` three times rather than claiming a
+success it did not have, and the run ended `FAILED_PERMANENT` at `repair_rounds: 2`. It
+found one defect — every repair event named a review node that had never run — and
+confirmed the identity stamping working in the field.
+
+A third run forced a node timeout with a five-second budget. It is the first live
+evidence for blocker B1: `ProcessManager` recorded `termination: "taskkill_tree"` on all
+three attempts and left no orphaned process, where until then only unit tests with
+stand-in processes had exercised the Windows branch.
+
+A failing verification, a review asking for changes, a containment violation and a
+cancellation still have unit coverage and no live evidence, and all three runs used
+throwaway repositories rather than a real project. `docs/START_HERE.md` records what
+each run established and what it did not.
 
 ## Allowed work
 
