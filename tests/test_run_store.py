@@ -7,12 +7,14 @@ database is reachable — `make postgres-up` provides one.
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
 
 from orchestrator.domain.models import TaskState
 from orchestrator.workflow.store import (
+    REPLACE_RETRY_DELAYS,
     ApprovalRequest,
     FilesystemRunStore,
     RunEvent,
@@ -332,6 +334,59 @@ def test_a_second_store_instance_sees_the_same_runs(tmp_path: Path) -> None:
 
     assert second.load("RUN-shared").task_id == "TASK-1"
     assert [e.kind for e in second.read_events("RUN-shared")] == ["run_created"]
+
+
+# ---------------------------------------------------------------------------
+# Filesystem record durability
+# ---------------------------------------------------------------------------
+
+
+def test_a_transiently_locked_record_is_retried_rather_than_failing_the_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A scanner holding run.json for a moment must not fail the run it describes."""
+    store = FilesystemRunStore(tmp_path / "runs")
+    record = store.create(_record())
+    real_replace = Path.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(self: Path, target):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise PermissionError(5, "Access is denied")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    record.task_state = TaskState.RUNNING
+    store.save(record)
+
+    assert attempts["count"] == 3
+    assert store.load("RUN-1").task_state is TaskState.RUNNING
+
+
+def test_a_record_that_stays_locked_still_fails(tmp_path: Path, monkeypatch) -> None:
+    """Retrying forever would report a save that never happened."""
+    store = FilesystemRunStore(tmp_path / "runs")
+    record = store.create(_record())
+
+    def always_denied(self: Path, target):
+        raise PermissionError(5, "Access is denied")
+
+    monkeypatch.setattr(Path, "replace", always_denied)
+
+    with pytest.raises(PermissionError):
+        store.save(record)
+
+
+def test_the_retry_does_not_slow_the_ordinary_save(tmp_path: Path) -> None:
+    """The happy path must not pay for the retry: first attempt, no sleep."""
+    store = FilesystemRunStore(tmp_path / "runs")
+    record = store.create(_record())
+
+    started = time.monotonic()
+    store.save(record)
+
+    assert time.monotonic() - started < min(REPLACE_RETRY_DELAYS)
 
 
 def test_the_suite_refuses_a_database_that_is_not_local() -> None:

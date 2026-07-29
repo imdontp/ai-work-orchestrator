@@ -12,6 +12,7 @@ reconciliation in ``WorktreeManager`` has nothing to reconcile against.
 from __future__ import annotations
 
 import json
+import time
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
@@ -145,6 +146,35 @@ class RunStore(ABC):
     def read_events(self, run_id: str) -> tuple[RunEvent, ...]: ...
 
 
+#: Backoff before retrying the record rename, in seconds.
+REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4)
+
+
+def _replace_with_retry(temporary: Path, path: Path) -> None:
+    """Rename over the record, tolerating a transient hold on the file.
+
+    On Windows a file that was written a moment ago can still be open in a virus
+    scanner or the search indexer, and ``os.replace`` then fails with
+    ``PermissionError [WinError 5]`` even though nothing is wrong. A full test run hit
+    this once in ``save``; the same failure during a live run would mark the run failed
+    while the work it describes was fine, because the runner records a save error as a
+    run error. Retrying is the remedy — the holder releases in milliseconds.
+
+    Not conditional on the platform: on POSIX ``rename`` is atomic and never raises
+    this, so the retry loop simply never runs, and a genuine permissions problem still
+    surfaces after the last attempt rather than being swallowed.
+    """
+    for delay in REPLACE_RETRY_DELAYS:
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    # Out of retries. A record that cannot be written leaves the run unresumable, so
+    # this raises rather than reporting a save that did not happen.
+    temporary.replace(path)
+
+
 class FilesystemRunStore(RunStore):
     """Everything under ``run_root``. The default, and what the tests run against.
 
@@ -205,7 +235,7 @@ class FilesystemRunStore(RunStore):
         # makes the run unresumable.
         temporary = path.with_suffix(".json.tmp")
         temporary.write_text(record.model_dump_json(indent=2), encoding="utf-8")
-        temporary.replace(path)
+        _replace_with_retry(temporary, path)
 
     # -- artifacts ---------------------------------------------------------------
 
