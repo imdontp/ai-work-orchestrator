@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_env: str = "development"
+    #: Loopback on purpose. The API has no authentication, so binding it anywhere else
+    #: publishes an unauthenticated control plane that can run CLI agents against
+    #: PROJECT_ROOT and approve its own runs. See docs/SECURITY_POLICY.md.
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     log_level: str = "INFO"
