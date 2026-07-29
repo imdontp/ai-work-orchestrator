@@ -9,56 +9,78 @@ those are decisions recorded in `docs/MVP_SCOPE.md`, not debt. Listing them here
 make settled choices read as unfinished work.
 
 Status as of the last update: Milestone 2 is complete, every item in the MVP definition
-of done has live evidence behind it, and five runs have been driven against the real
-Claude Code and Codex CLIs. `docs/START_HERE.md` records what each run established.
+of done has live evidence behind it, and six runs have been driven against the real
+Claude Code and Codex CLIs — the sixth against a real project. `docs/START_HERE.md`
+records what each run established.
 
 ---
 
-## 1. Run the pipeline against a real project
+## 1. Run the pipeline against a real project — first attempt done
 
-**Start here.** Every run so far used a throwaway repository built for the run — one
-file of implementation, a test suite finishing in milliseconds. Nothing is known about
-how the system behaves at real size.
+Run 6 carried a task through `auto-trade-system` (420 tracked files, 116 test files,
+a 283-second suite): add unit tests for `src/research/splits.py`, which had none.
 
-Pick an existing checkout (not this one; ADR-010 forbids it and the config validator
-refuses it), set `PROJECT_ROOT` and `VERIFICATION_COMMANDS` for it, and carry one
-bounded, genuinely useful task through the full workflow.
+**The work itself was correct.** Codex wrote `tests/test_splits.py` — nine tests, all
+passing, no source file touched — and reported `claimed_passed: false` because the full
+suite was red for reasons that had nothing to do with it. The file has been kept.
 
-Watch, because none of it has been observed:
+**The run still ended `FAILED_PERMANENT`,** because verification ran the full suite and
+the full suite does not pass. That is the finding, and it is bigger than the run: see
+item 2.
 
-- **Context size.** `ContextPackageBuilder` inlines prior artifacts up to
-  `MAX_INLINE_ARTIFACT_CHARS` (20k) and references them by path beyond that. A real
-  analysis may cross that line for the first time.
-- **Verification duration** against `node_timeout_seconds` (1800). A suite taking
-  minutes is fine; one taking longer is not.
-- **Whether the analysis picks up existing conventions,** or proposes something the
-  repository would reject.
-- **The approval package at real diff size,** now that it names files rather than
-  counting them.
+Four things a toy repository could never have shown, all found before the pipeline even
+started:
 
-Expect defects. Every run so far produced at least one, and none were found by reading
-code.
+- **The suite takes 283 seconds.** `runner_config()` hardcodes
+  `VerificationCommand(timeout_seconds=600)`, so this project has a factor of two in
+  hand and a slower one would hit the ceiling with no way to configure around it.
+- **`.venv` is gitignored, so a worktree has no dependencies.** The interpreter has to
+  be named by absolute path in `VERIFICATION_COMMANDS` while the code under test comes
+  from the worktree.
+- **The suite asserts on `frontend/dist`, which `frontend/.gitignore` excludes.** Five
+  tests pass in the developer's checkout and fail in any worktree, because the built
+  assets are not in git. **A worktree is not equivalent to a checkout** for any project
+  with a build step — a real constraint on ADR-005 that nothing in the architecture
+  states.
+- **Analysis took 109 seconds** and produced a 7.3 KB artifact, comfortably under
+  `MAX_INLINE_ARTIFACT_CHARS`. Context size was not the problem it was expected to be.
 
-**Done when:** a real task has been carried end to end, and whatever it exposed is
-either fixed or written down.
+The analysis quality held up at real size: it cited source line numbers, adopted the
+repository's own import convention over the one the task text specified, and flagged two
+testing pitfalls (unstable sort on duplicate timestamps, `reset_index` breaking a naive
+`DataFrame.equals`) that the task had not mentioned.
 
-## 2. Live evidence for a verification failure
+**Still to do:** run a task whose verification can actually pass, so the pipeline is
+observed reaching `COMPLETED` on a real project rather than failing on the repository's
+own state. That needs item 2 settled first.
 
-The path where `VerificationRunner` contradicts a worker's success claim is the core of
-rule 5, and it has unit coverage only.
+## 2. Verification is only meaningful against a deterministic suite
 
-Run 2 tried and missed: the implementer reported `status: "blocked"`, which sends the
-run to repair before the verify node is reached, so the contradiction never happened.
-Forcing it needs a worker that reports `completed` while the suite is actually red,
-which honest workers do not readily do.
+Item 2 used to read "get live evidence for a verification failure". Run 6 supplied it —
+`verification_finished` recorded `passed: false` twice, the run did not reach
+`COMPLETED`, and the repair budget bounded it. Rule 5 works.
 
-Better reached opportunistically during item 1, once the work is large enough to get
-wrong, than staged. If it must be staged, aim for a change that passes the tests the
-worker can see and fails one it cannot.
+What it also showed is that **the runner cannot tell "the worker broke it" from "this
+suite was already broken"**, and in run 6 it was the second. The worker did correct work
+and the run failed. Two distinct causes, both outside the worker's control:
 
-**Done when:** a run records `verification_finished` with `passed: false` alongside
-`claimed_passed: true`, the two stay separately recorded, and the run does not reach
-`COMPLETED`.
+- **Pre-existing failures.** `test_strategy_gate_testnet_check_is_read_only` is red in
+  the developer's checkout, before any agent touches it.
+- **Order-dependent failures.** `test_dry_run_cycle_ignores_duplicate_signal` passes
+  alone and fails in the full suite, returning `OPEN_ORDER_EXISTS` where it expects
+  `DUPLICATE_SIGNAL` — state leaking between tests.
+
+Deselecting known failures, as run 6 did, is a workaround that has to be maintained by
+hand and is easy to get wrong: the deselect list for run 6 was built from a truncated
+log and missed one, which then failed verification.
+
+The decision to make: what the orchestrator should require of a project before it will
+believe a verification result, and what it should do when the answer is "this suite is
+not trustworthy". Options include recording a baseline of known failures at run start
+and comparing against it, rather than requiring green.
+
+**Done when:** the position is decided and written down, and a real project run reaches
+`COMPLETED` through verification that means something.
 
 ## 3. Live evidence for a review returning `request_changes`
 
@@ -67,7 +89,8 @@ a review verdict into a repair round is covered by tests and by the wording fix 
 `56c5972`, but has never been driven by a real reviewer.
 
 Needs an implementation that passes verification and still has something a reviewer
-would object to — so, again, most likely to appear during item 1.
+would object to. Run 6 never reached the review node at all — verification failed first
+and consumed the repair budget — so this is blocked behind item 2 in practice.
 
 **Done when:** the repair reason names the review node, the implementation replays in
 the same worktree, and the repair budget bounds it.
