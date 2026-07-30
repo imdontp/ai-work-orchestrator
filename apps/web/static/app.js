@@ -21,7 +21,8 @@ import {
   getWorkflow,
   listRuns,
 } from "./api.js";
-import { badge, el, replace, stateBadge, toggle } from "./dom.js";
+import { badge, el, moreLink, replace, stateBadge, toggle } from "./dom.js";
+import { icon } from "./icons.js";
 import {
   approvalsPage,
   errorPage,
@@ -39,11 +40,28 @@ const nav = document.getElementById("nav");
 const guardrails = document.getElementById("guardrails");
 
 const NAV = [
-  { hash: "#/", icon: "▤", label: "Runs" },
-  { hash: "#/approvals", icon: "⛉", label: "Approvals" },
-  { hash: "#/workers", icon: "⚇", label: "Workers" },
-  { hash: "#/policies", icon: "⛨", label: "Policies" },
+  { hash: "#/", glyph: "runs", label: "Runs" },
+  { hash: "#/approvals", glyph: "approvals", label: "Approvals" },
+  { hash: "#/workers", glyph: "workers", label: "Workers" },
+  { hash: "#/policies", glyph: "policies", label: "Policies" },
 ];
+
+//: Dark is the design. The OS preference does not decide what a control room looks
+//: like; this does, and it is remembered.
+const THEME_KEY = "aiwo.theme";
+
+function currentTheme() {
+  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  try {
+    localStorage.setItem(THEME_KEY, theme);
+  } catch {
+    /* private mode; the choice simply will not persist */
+  }
+}
 
 let timer = null;
 let generation = 0;
@@ -78,7 +96,7 @@ function renderNav(current) {
       {},
       NAV.map((item) =>
         el("a", { href: item.hash, class: item.hash === active ? "on" : "" }, [
-          el("span", { class: "ico", text: item.icon }),
+          el("span", { class: "ico" }, [icon(item.glyph)]),
           item.label,
         ]),
       ),
@@ -88,11 +106,18 @@ function renderNav(current) {
 
 function renderGuardrails() {
   const rule = (label, good) =>
-    el("li", {}, [el("span", { class: good ? "ok" : "bad", text: good ? "✓" : "✕" }), label]);
+    el("li", {}, [
+      el("span", { class: good ? "ok" : "bad" }, [icon(good ? "check" : "cross", { size: 12 })]),
+      label,
+    ]);
   replace(
     guardrails,
     el("div", {}, [
-      el("h4", {}, [el("span", { class: "ok", text: "⛨" }), "Guardrails", badge("active", "ok")]),
+      el("h4", {}, [
+        el("span", { class: "ok" }, [icon("policies", { size: 14 })]),
+        "Guardrails",
+        badge("active", "ok"),
+      ]),
       el("ul", {}, [
         rule("git push: human approval", !capabilities?.git_push_allowed),
         rule("network access: restricted", !capabilities?.network_access_allowed),
@@ -100,7 +125,7 @@ function renderGuardrails() {
         rule("containment: orchestrator-owned", true),
         rule("approval required: high risk", true),
       ]),
-      el("a", { href: "#/policies", class: "faint", style: "font-size:11.5px", text: "View all policies →" }),
+      moreLink("#/policies", "View all policies"),
     ]),
   );
 }
@@ -111,14 +136,15 @@ function renderGuardrails() {
 
 function renderTopbar(current, context = {}) {
   const { run } = context;
+  const here = NAV.find((n) => n.hash === (current.name === "runs" ? "#/" : `#/${current.name}`));
   const title =
     current.name === "detail"
       ? el("h1", {}, [
-          el("span", { class: "faint", text: "▤" }),
+          icon("runs", { cls: "hicon", size: 17 }),
           run?.task_id ?? current.runId,
           run ? stateBadge(run.task_state, { live: run.advancing }) : null,
         ])
-      : el("h1", {}, [NAV.find((n) => n.hash === (current.name === "runs" ? "#/" : `#/${current.name}`))?.label ?? "Runs"]);
+      : el("h1", {}, [icon(here?.glyph ?? "runs", { cls: "hicon", size: 17 }), here?.label ?? "Runs"]);
 
   const cancellable = run && !["COMPLETED", "FAILED_PERMANENT", "CANCELLED"].includes(run.task_state);
 
@@ -136,14 +162,36 @@ function renderTopbar(current, context = {}) {
               disabled: pendingAction ? true : null,
               on: { click: () => onCancel(run) },
             },
-            [pendingAction === "cancel" ? el("span", { class: "spin" }) : "◼", "Cancel run"],
+            [
+              pendingAction === "cancel"
+                ? el("span", { class: "spin" })
+                : icon("stop", { size: 13 }),
+              "Cancel run",
+            ],
           )
         : null,
       toggle("auto", "auto-refresh", auto, (event) => {
         auto = event.target.checked;
         schedule();
       }),
-      el("button", { class: "ghost", on: { click: () => render({ silent: true }) } }, ["↻ Refresh"]),
+      el("button", { class: "ghost", on: { click: () => render({ silent: true }) } }, [
+        icon("refresh", { size: 13 }),
+        "Refresh",
+      ]),
+      el(
+        "button",
+        {
+          class: "ghost icon-only",
+          title: "Switch theme",
+          on: {
+            click: () => {
+              applyTheme(currentTheme() === "dark" ? "light" : "dark");
+              render({ silent: true });
+            },
+          },
+        },
+        [icon(currentTheme() === "dark" ? "sun" : "moon", { size: 14 })],
+      ),
       el("span", { class: "stamp", id: "stamp" }),
     ]),
   );
@@ -335,6 +383,15 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden && auto) render({ silent: true });
 });
 
+let stored = null;
+try {
+  stored = localStorage.getItem(THEME_KEY);
+} catch {
+  /* private mode */
+}
+applyTheme(stored === "light" ? "light" : "dark");
+
+replace(document.getElementById("brandmark"), icon("brand", { size: 17 }));
 renderGuardrails();
 render();
 schedule();

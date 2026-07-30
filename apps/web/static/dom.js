@@ -8,6 +8,8 @@
  * CLI agents with filesystem write access.
  */
 
+import { icon } from "./icons.js";
+
 export function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -38,16 +40,23 @@ export function replace(host, content) {
 }
 
 /** A titled box. Every region of the page is one of these. */
-export function panel(title, { badge, actions, flush = false, area, icon } = {}, body) {
+export function panel(title, options = {}, body) {
+  const { badge, actions, flush = false, area, glyph, foot } = options;
   return el("section", { class: `panel${area ? ` area-${area}` : ""}` }, [
     el("header", {}, [
-      el("h2", {}, [icon ? el("span", { class: "faint", text: icon }) : null, title]),
+      el("h2", {}, [glyph ? icon(glyph, { cls: "hicon" }) : null, title]),
       badge || null,
       el("span", { class: "grow" }),
-      ...[].concat(actions || []),
+      ...[].concat(actions || []).filter(Boolean),
     ]),
     el("div", { class: `body${flush ? " flush" : ""}` }, [body]),
+    foot ? el("div", { class: "panel-foot" }, [foot]) : null,
   ]);
+}
+
+/** A "View all X →" line at the bottom of a panel. */
+export function moreLink(href, label) {
+  return el("a", { href, class: "more" }, [label, icon("chevronRight", { size: 13 })]);
 }
 
 export function badge(label, tone, { live = false } = {}) {
@@ -142,9 +151,15 @@ export function empty(message) {
   return el("p", { class: "empty", text: message });
 }
 
+/** A real switch rather than a bare checkbox — the input stays for keyboard use. */
 export function toggle(id, label, checked, onChange) {
   return el("label", { class: "switch" }, [
-    el("input", { type: "checkbox", id, checked: checked || null, on: { change: onChange } }),
+    el("span", { class: "track" }, [
+      el("input", { type: "checkbox", id, checked: checked || null, on: { change: onChange } }),
+      el("span", { class: "knob" }),
+    ]),
     label,
   ]);
 }
+
+export { icon };

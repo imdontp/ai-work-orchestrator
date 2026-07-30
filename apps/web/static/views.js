@@ -6,7 +6,8 @@
  * configuration, and neither offers a way to change it.
  */
 
-import { ago, badge, el, empty, frag, panel, row, stateBadge, table } from "./dom.js";
+import { ago, badge, el, empty, frag, moreLink, panel, row, stateBadge, table } from "./dom.js";
+import { icon } from "./icons.js";
 import { dag } from "./graph.js";
 import {
   approvalPanel,
@@ -25,7 +26,7 @@ export function runsPage(runs) {
   if (runs.length === 0) {
     return panel(
       "Runs",
-      { icon: "▤" },
+      { glyph: "runs" },
       empty("No runs yet. Submit a task with POST /api/v1/tasks — authoring stays an API call."),
     );
   }
@@ -48,7 +49,7 @@ export function runsPage(runs) {
 
   return panel(
     "Runs",
-    { icon: "▤", badge: badge(`${runs.length} total`, "idle"), flush: true },
+    { glyph: "runs", badge: badge(`${runs.length} total`, "idle"), flush: true },
     table(["Run", "State", "Task", "Workflow", "Created", "Nodes", "Repairs", "Waiting on"], rows),
   );
 }
@@ -75,14 +76,21 @@ export function runDetailPage(
       panel(
         "Workflow DAG",
         {
-          icon: "⧉",
+          glyph: "dag",
           badge: workflow
-            ? el("span", { class: "mono faint", text: `${workflow.workflow_id} v${workflow.version}` })
+            ? el("span", {
+                class: "mono faint",
+                text: `${workflow.workflow_id} v${workflow.version}`,
+              })
             : null,
+          actions: workflow ? zoomControls() : null,
         },
         workflow
           ? dag(workflow, states)
-          : el("p", { class: "notice", text: workflowError ?? "The workflow graph is unavailable." }),
+          : el("p", {
+              class: "notice",
+              text: workflowError ?? "The workflow graph is unavailable.",
+            }),
       ),
     ]),
 
@@ -109,7 +117,7 @@ export function approvalsPage(runs) {
   if (waiting.length === 0) {
     return panel(
       "Approval Inbox",
-      { icon: "⛉", badge: badge("0 waiting", "ok") },
+      { glyph: "approvals", badge: badge("0 waiting", "ok") },
       empty("Nothing is waiting on a human."),
     );
   }
@@ -127,7 +135,7 @@ export function approvalsPage(runs) {
 
   return panel(
     "Approval Inbox",
-    { icon: "⛉", badge: badge(`${waiting.length} waiting`, "warn"), flush: true },
+    { glyph: "approvals", badge: badge(`${waiting.length} waiting`, "warn"), flush: true },
     table(["Gate", "Run", "Task", "Nodes done", "Waiting since", ""], cards),
   );
 }
@@ -137,7 +145,9 @@ export function approvalsPage(runs) {
 // ---------------------------------------------------------------------------
 
 export function workersPage(capabilities, workflow) {
-  if (!capabilities) return panel("Workers", { icon: "⚇" }, empty("Capabilities unavailable."));
+  if (!capabilities) {
+    return panel("Workers", { glyph: "workers" }, empty("Capabilities unavailable."));
+  }
 
   const rows = capabilities.configured_workers.map((name) => {
     const nodes = (workflow?.nodes ?? []).filter((node) => node.worker_requirement === name);
@@ -151,13 +161,17 @@ export function workersPage(capabilities, workflow) {
   return frag([
     panel(
       "Configured workers",
-      { icon: "⚇", badge: badge(`${capabilities.configured_workers.length}`, "idle"), flush: true },
+      {
+        glyph: "workers",
+        badge: badge(`${capabilities.configured_workers.length}`, "idle"),
+        flush: true,
+      },
       table(["Adapter", "Profiles it runs", "Nodes"], rows),
     ),
     el("div", { style: "height:16px" }),
     panel(
       "System",
-      { icon: "⚙" },
+      { glyph: "policies" },
       el("div", { class: "rows" }, [
         row("Milestone", el("span", { class: "mono", text: capabilities.milestone })),
         row("Execution modes", capabilities.execution_modes.join(", ")),
@@ -179,7 +193,7 @@ export function policiesPage(capabilities) {
   return frag([
     panel(
       "Guardrails",
-      { icon: "⛨", badge: badge("active", "ok") },
+      { glyph: "policies", badge: badge("active", "ok") },
       el("div", { class: "rows" }, rules.map(([key, value, good]) =>
         row(key, el("span", { class: good ? "ok mono" : "bad mono", text: String(value) })),
       )),
@@ -187,7 +201,7 @@ export function policiesPage(capabilities) {
     el("div", { style: "height:16px" }),
     panel(
       "What this page is not",
-      { icon: "ⓘ" },
+      { glyph: "info" },
       el("p", { class: "faint", style: "margin:0" }, [
         "Read-only. Permissions live in .env and orchestrator/policies/, and ADR-011 keeps " +
           "config editing out of the browser: a mistake made through a UI on a system that " +
@@ -204,7 +218,7 @@ export function policiesPage(capabilities) {
 export function errorPage(error, { notFound = false } = {}) {
   return panel(
     notFound ? "Not found" : "Cannot load this",
-    { icon: "⚠" },
+    { glyph: "warning" },
     frag([
       el("p", { class: "error", text: String(error?.message ?? error) }),
       el("p", { style: "margin-top:12px" }, [
@@ -212,4 +226,47 @@ export function errorPage(error, { notFound = false } = {}) {
       ]),
     ]),
   );
+}
+
+/* DAG zoom. Real behaviour, not chrome: a graph with more nodes than fit is the case
+ * this exists for, and the transform is applied to the laid-out rows rather than
+ * re-rendering them. */
+function zoomControls() {
+  const scale = (factor) => () => {
+    const box = document.getElementById("dagscale");
+    if (!box) return;
+    const current = Number(box.dataset.scale ?? "1");
+    const next = factor === null ? 1 : Math.min(1.6, Math.max(0.5, current + factor));
+    box.dataset.scale = String(next);
+    box.style.transform = `scale(${next})`;
+    const label = document.getElementById("dagzoom");
+    if (label) label.textContent = `${Math.round(next * 100)}%`;
+  };
+
+  return [
+    el("button", { class: "ghost sm", title: "Reset zoom", on: { click: scale(null) } }, [
+      icon("fit", { size: 13 }),
+      "Fit",
+    ]),
+    el("span", { class: "zoomer" }, [
+      el("button", { class: "ghost sm", title: "Zoom out", on: { click: scale(-0.1) } }, [
+        icon("minus", { size: 13 }),
+      ]),
+      el("span", { class: "mono faint", id: "dagzoom", text: "100%" }),
+      el("button", { class: "ghost sm", title: "Zoom in", on: { click: scale(0.1) } }, [
+        icon("plus", { size: 13 }),
+      ]),
+    ]),
+    el("button", {
+      class: "ghost sm",
+      title: "Full screen",
+      on: {
+        click: (event) => {
+          const panelNode = event.currentTarget.closest(".panel");
+          if (!document.fullscreenElement) panelNode?.requestFullscreen?.();
+          else document.exitFullscreen?.();
+        },
+      },
+    }, [icon("expand", { size: 13 })]),
+  ];
 }

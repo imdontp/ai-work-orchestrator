@@ -134,9 +134,15 @@ export function progress(run, workflow) {
  * anything it depends on; what the rows do not draw is a second incoming edge, which
  * the node card names instead.
  */
-export function layout(workflow, perRow = 4) {
+export function layout(workflow, maxPerRow = 4) {
   const order = workflow.execution_order.filter((id) => workflow.nodes.some((n) => n.id === id));
   const byId = new Map(workflow.nodes.map((node) => [node.id, node]));
+
+  // Balanced rather than greedy: five nodes at four per row gave a full row and a
+  // lone card with three empty slots beside it. Fill the same number of rows evenly.
+  const rowCount = Math.max(1, Math.ceil(order.length / maxPerRow));
+  const perRow = Math.ceil(order.length / rowCount);
+
   const rows = [];
   for (let index = 0; index < order.length; index += perRow) {
     const slice = order.slice(index, index + perRow).map((id, offset) => ({
@@ -145,5 +151,5 @@ export function layout(workflow, perRow = 4) {
     }));
     rows.push({ cells: slice, reversed: (index / perRow) % 2 === 1 });
   }
-  return { rows, order };
+  return { rows, order, perRow };
 }
