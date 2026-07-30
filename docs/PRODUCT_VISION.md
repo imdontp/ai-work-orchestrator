@@ -30,6 +30,11 @@ It is a reliable AI work orchestration platform.
 
 ## Experience model
 
+This is the long-term shape, not a milestone. **ADR-011 scopes the first dashboard far
+more narrowly** — run list and detail, approval inbox, cancel — and explicitly rejects
+the overview page below as the place to start. Build against ADR-011; read this for
+where it is eventually going.
+
 ### Overview dashboard
 
 Shows active runs, queue, workers, approvals, recent outputs, activity, and a quick command box.

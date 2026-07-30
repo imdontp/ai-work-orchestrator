@@ -7,6 +7,9 @@ evidence behind it, and seven runs have been driven against the real Claude Code
 Codex CLIs — the last two against a real project, the seventh reaching `COMPLETED`.
 The sections below record what each run established and what it did not.
 
+Milestone 3 is **defined and not started**: ADR-011 scopes it to a read-mostly operator
+dashboard over the existing API. `apps/web/` holds a README and no code.
+
 The spike found two blockers. Both are closed:
 
 - **B1 — fixed.** `execution/process_manager.py` could not kill a timed-out process on
@@ -231,13 +234,22 @@ tested; only a worker spontaneously misbehaving is not, and it cannot be.
 
 ## Recommended next action
 
-Decide what the next milestone is. Milestone 2 is complete, every item in the MVP
-definition of done has live evidence, and run 7 carried real work through a real project
-to `COMPLETED`. There is no M3 defined anywhere in these documents, so the next thing to
-build is a choice rather than a continuation — ADR-009 puts the dashboard after core
-reliability, and core reliability is now demonstrated rather than asserted.
+**Milestone 3, slice 1: run list and run detail.** `docs/BACKLOG.md` item 9.
 
-`docs/BACKLOG.md` holds what is left. Nothing in it blocks a milestone; the items are
+M3 is defined by **ADR-011**: a read-mostly operator dashboard over the existing HTTP
+surface, in three slices — run list and detail, then the approval inbox, then cancel.
+Nothing else; in particular no task authoring, no config or workflow editing, and no new
+backend endpoints. ADR-009 deferred the dashboard until core reliability was
+demonstrated rather than asserted, and seven live runs have now demonstrated it.
+
+Read ADR-011 before writing any of it. The scope it rules out is most of what a
+dashboard could plausibly do, and the reason is recorded there.
+
+One thing it does not decide: the frontend stack. `apps/web/README.md` named Next.js
+during Milestone 0, before ADR-011 narrowed the pages; treat that as unsettled rather
+than as a standing decision.
+
+`docs/BACKLOG.md` holds everything else. Nothing in it blocks a milestone; the items are
 evidence still to gather, decisions with no deadline, and one standing task. Use the
 orchestrator on real work and the remaining unevidenced paths will arrive on their own —
 they have resisted every attempt to stage them.
@@ -247,18 +259,22 @@ Keep `workers/opencode.py` a placeholder.
 Re-run `make test-live` after any CLI upgrade — it is what re-establishes that the
 recorded argv templates still hold.
 
-Do not begin the web dashboard yet (ADR-009).
+Do not expose the dashboard beyond `127.0.0.1` before backlog item 5 lands. ADR-011
+records why a browser client changes that calculation.
 
 ## Not yet done
 
 Named here rather than discovered later. `docs/BACKLOG.md` carries the same items in
 the order they should be picked up, with what each one needs to be considered done.
 
-- No live evidence for a verification failure, review-requested changes or a containment
-  violation. See the section above.
+- No live evidence for a review returning `request_changes`. A verification failure has
+  it — run 6 — and a containment violation will not get it by decision. See the section
+  above for both.
 - The API is unauthenticated. This is deliberate for a single-user local control plane
   and the reasoning is recorded in `docs/SECURITY_POLICY.md`; it is not a gap that has
-  been overlooked, and it is a gap that must close before the API leaves localhost.
+  been overlooked, and it is a gap that must close before the API leaves localhost —
+  which ADR-011 makes a prerequisite of shipping the dashboard anywhere but this machine.
+- Milestone 3 has no code. `apps/web/` is a README.
 - `RunStore.append_event` opens the events file in append mode and carries the same
   transient-lock exposure on Windows that `save` was hardened against. It has never
   been observed failing, so it has been left alone rather than hardened on a guess.

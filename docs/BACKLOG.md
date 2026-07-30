@@ -3,15 +3,19 @@
 What is left, in the order it should be picked up. Each entry says what it is, why it
 sits where it does, and how you will know it is done.
 
-This is not a list of everything that could be built. Deferred scope — the web
-dashboard (ADR-009), `workers/opencode.py`, parallel execution — is absent on purpose:
-those are decisions recorded in `docs/MVP_SCOPE.md`, not debt. Listing them here would
-make settled choices read as unfinished work.
+This is not a list of everything that could be built. Deferred scope —
+`workers/opencode.py`, parallel execution — is absent on purpose: those are decisions
+recorded in `docs/MVP_SCOPE.md`, not debt. Listing them here would make settled choices
+read as unfinished work.
 
 Status as of the last update: Milestone 2 is complete, every item in the MVP definition
 of done has live evidence behind it, and seven runs have been driven against the real
 Claude Code and Codex CLIs. The seventh carried a task through a real project to
 `COMPLETED`. `docs/START_HERE.md` records what each run established.
+
+Milestone 3 is defined by **ADR-011** and is items 9 to 11 below. Items 1 to 8 are
+Milestone 2's tail: four are closed, and the four that remain are evidence to gather,
+decisions with no deadline, and one standing task. None of them blocks M3.
 
 ---
 
@@ -116,27 +120,22 @@ produces something defensible enough to verify and weak enough to object to.
 **Done when:** the repair reason names the review node, the implementation replays in
 the same worktree, and the repair budget bounds it.
 
-## 4. Decide how to evidence a containment violation
+## 4. How to evidence a containment violation — decided, no live evidence
 
-`WorkspaceContainment` failing a run for writes outside the workspace is the enforcement
-behind rules 6 and 7 and ADR-010 — the answer to blocker B2, where Codex was observed
-writing above its workspace root.
+**Closed by decision in `42c9364`, recorded in `START_HERE.md`.** Unit coverage is
+accepted as sufficient, because the case worth having cannot be staged: a worker that
+writes outside its workspace *without being told to* is by definition unschedulable, and
+a harness that instructs an escape would show only that an instructed escape is caught —
+which `FakeAdapter.escape_write` in `tests/test_workflow_runner.py` already shows.
 
-It has unit coverage and no live evidence, and provoking a real worker into escaping is
-awkward: the interesting case is a worker that escapes *without being told to*, which is
-exactly what cannot be scheduled.
+What supports the rule instead: the deny barrier is exercised directly by the
+write-barrier tests, `WorkspaceContainment` is proven on both platforms with
+`scripts/verify_posix.sh` covering POSIX in a container, and every live run has logged
+`containment_armed` on every write-capable node with the primary checkout confirmed
+untouched afterwards.
 
-This is a decision, not an experiment. Either:
-
-- accept unit coverage as sufficient here and say so in `START_HERE.md` — defensible,
-  since the barrier itself is separately proven by the write-barrier tests and every run
-  logs `containment_armed`; or
-- build a deliberate escape harness, a worker profile instructed to write to an absolute
-  path outside the workspace, and record what the run does.
-
-Either is fine. Leaving it silently unevidenced is not.
-
-**Done when:** the choice is made and written into `START_HERE.md`.
+The enforcement path is tested. Only a worker spontaneously misbehaving is not, and it
+cannot be.
 
 ## 5. Authentication, before the API leaves localhost
 
@@ -151,8 +150,15 @@ configured checkout.
 **Do not start this speculatively.** It is listed so it cannot be forgotten at the point
 it becomes required, not because it is due now.
 
+**ADR-011 moved it closer.** A browser client means CORS, and CORS means an origin that
+is not the terminal the operator typed in. The dashboard does not require this to be
+built — it requires it before the dashboard is reachable from anywhere but this machine,
+and the dashboard must not become the reason the API gets exposed first. Serving the
+dashboard same-origin from the existing FastAPI app would keep it off the critical path;
+a separate dev server would not.
+
 **Blocking for:** any remote access, any second user, any deployment beyond this
-machine.
+machine, and exposing the M3 dashboard beyond `127.0.0.1`.
 
 ## 6. Decide whether `append_event` needs the same lock tolerance as `save`
 
@@ -191,28 +197,86 @@ Evidence on file was recorded against **Claude Code 2.1.220** and **codex-cli 0.
 **Done when:** the spike has been re-recorded and the live suite passes against the new
 versions.
 
-## 8. Decide what a read-only node should see: the checkout or the base revision
+## 8. What a read-only node sees — settled: the run's one revision
 
-Observed in run 7.
+Observed in run 7, **settled in `42c9364`.**
 
-`_resolve_workspace` gives a read-only node with no write-node dependency the primary
-checkout — which includes uncommitted and untracked files. A write node gets a worktree
-created from `HEAD`, which does not.
+`_resolve_workspace` used to give a read-only node with no write-node dependency the
+primary checkout, which includes uncommitted and untracked files, while a write node got
+a worktree from `HEAD`, which does not. In run 7 the analyst read a `tests/test_splits.py`
+that existed only as an untracked change and planned around it; the implementer never saw
+that file. Nothing went wrong — the implementer wrote it itself — but the two nodes were
+reasoning about different repositories, and the analysis read as though it were about the
+committed state.
 
-In run 7 the analyst read a `tests/test_splits.py` that existed only as an untracked file
-in the developer's checkout, and planned around it. The implementer, working from `HEAD`,
-never saw that file. The outcome matched anyway because the implementer wrote it itself,
-but the two nodes were reasoning about different repositories.
+Now: if a workflow has a write node anywhere in it, **every** node reads that run's
+worktree, so the worktree is created before the first node rather than at the first
+write. `WorkflowDefinition.has_write_node` is what decides. A graph with no write node
+has nothing to isolate and still reads the checkout directly, which is covered by its own
+test.
 
-Why it matters: an analysis can plan against work in progress that the implementer will
-never receive, and the resulting plan reads as though it were about the committed state.
+This generalises what an earlier live run already forced for the reviewer: a reviewer
+pointed at the primary checkout reviews code that predates the work it was asked about.
+The same reasoning applies before the work as after it.
 
-The options are narrow. Point read-only nodes at a worktree from the same `base_ref` the
-write node will use, so every node sees one state. Or keep the current behaviour and say
-in the analyst's prompt that it is looking at a working tree which may differ from what
-the implementer receives.
+---
 
-Not urgent — it produced no wrong result in run 7. Recorded because it is the kind of
-thing that produces a baffling artifact months later.
+# Milestone 3 — the operator dashboard
 
-**Done when:** the choice is made and either the code or the prompt reflects it.
+Scoped by **ADR-011**. Read it first: it rules out most of what a dashboard could
+plausibly do — no task authoring, no config or workflow editing, no live log streaming —
+and records why. Submitting a task stays an API call.
+
+**No new backend surface.** `apps/api/app/routers/runs.py` already exposes list, detail,
+events, approval package, artifacts, decision and cancel. If a page needs something the
+API does not have, that is a signal to question the page, not to add an endpoint.
+
+**Undecided and needed before item 9:** the frontend stack. `apps/web/README.md` named
+Next.js during Milestone 0, before ADR-011 narrowed the pages to three. The trade is a
+real build toolchain and its dependency tree against a single self-contained page the
+existing FastAPI app serves — the second keeps the dashboard same-origin, which sidesteps
+CORS and therefore keeps item 5 off the critical path. Nothing in the ADRs settles it.
+
+## 9. M3 slice 1 — run list and run detail
+
+Every run, its state, its nodes, its event trail, and its artifacts rendered rather than
+downloaded. This is the slice that makes the other two possible, and the one that proves
+whether the existing API is enough.
+
+Artifacts matter most here. A run's output is JSON validated against `contracts/`, and
+reading it today means fetching an artifact by name and reading raw JSON. An analysis
+artifact is 7 KB of structured plan; a verification result carries `claimed_passed`,
+`verified`, `baseline` and `regressions`, which are four distinct facts that a human
+currently has to reconcile by hand.
+
+**Done when:** a run driven end to end can be followed from the browser without reading
+`runs/` on disk or calling the API by hand, and the four verification facts are legible
+as four facts.
+
+## 10. M3 slice 2 — approval inbox
+
+The pending gates across all runs, each showing its approval package, with approve,
+request changes and reject.
+
+This is the slice ADR-011 says the milestone exists for: the approval gates are the part
+a human is *required* for, and they are currently reachable only by hand-written HTTP
+calls. The high-risk gate shows a change list — run 1 found it counting dirty files
+instead of naming them — so the package has the content; nothing renders it.
+
+Blocked by item 9, which establishes how a run and its artifacts are displayed.
+
+**Done when:** a run paused at a gate can be approved or rejected from the browser, the
+decision reaches the same code path as the API call, and a rejected run is `CANCELLED`
+with the operator's reason kept.
+
+## 11. M3 slice 3 — cancel from the interface
+
+Stop a running run without a terminal. `POST /runs/{run_id}/cancel` exists and works
+against real CLIs — runs 4 and 5 — so this is a button and a confirmation, not new
+behaviour.
+
+Last because it is the smallest and because rejecting at an approval gate already covers
+the common case of stopping a run that is waiting rather than working.
+
+**Done when:** a run cancelled from the browser reaches `CANCELLED`, the worker process
+is gone, and `repair_rounds` has not advanced.
