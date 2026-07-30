@@ -61,6 +61,8 @@ The system is a **deterministic control plane** driving **LLM CLI workers**. The
 ```
 apps/api          FastAPI control plane — health, capabilities, task intake, run control
   services/       OrchestrationService: builds runners, supervises background advances
+apps/web/static   Operator dashboard — plain ES modules, no build step, mounted at
+                  /dashboard by the API itself so it is same-origin (ADR-011, ADR-012)
 orchestrator/     Deterministic decision layer — no provider knowledge
   domain/         Task, TaskState, TaskPermissions, ExecutionMode, ApprovalRisk (pydantic)
   state_machine/  TaskStateMachine — explicit allowed-transition table, raises InvalidTransition

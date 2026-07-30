@@ -7,8 +7,10 @@ evidence behind it, and seven runs have been driven against the real Claude Code
 Codex CLIs — the last two against a real project, the seventh reaching `COMPLETED`.
 The sections below record what each run established and what it did not.
 
-Milestone 3 is **defined and not started**: ADR-011 scopes it to a read-mostly operator
-dashboard over the existing API. `apps/web/` holds a README and no code.
+Milestone 3 is **built and unevidenced**: ADR-011 scopes it to a read-mostly operator
+dashboard, ADR-012 amends that with one endpoint, and all three slices are in
+`apps/web/static/` — served at `/dashboard` by the API itself. No live run has been
+watched through it yet, which is `docs/BACKLOG.md` item 12.
 
 The spike found two blockers. Both are closed:
 
@@ -234,20 +236,21 @@ tested; only a worker spontaneously misbehaving is not, and it cannot be.
 
 ## Recommended next action
 
-**Milestone 3, slice 1: run list and run detail.** `docs/BACKLOG.md` item 9.
+**Drive a live run and watch it through the dashboard.** `docs/BACKLOG.md` item 12.
 
-M3 is defined by **ADR-011**: a read-mostly operator dashboard over the existing HTTP
-surface, in three slices — run list and detail, then the approval inbox, then cancel.
-Nothing else; in particular no task authoring, no config or workflow editing, and no new
-backend endpoints. ADR-009 deferred the dashboard until core reliability was
-demonstrated rather than asserted, and seven live runs have now demonstrated it.
+M3 is built. `make run`, then `http://127.0.0.1:8000/dashboard/`. It shows the workflow
+DAG with the run's position on it, the approval package with approve, request changes
+and reject, artifacts rendered from JSON, the workers and their sessions, and the event
+trail. ADR-011 scopes it; ADR-012 records the one endpoint it needed and the boundary on
+that endpoint.
 
-Read ADR-011 before writing any of it. The scope it rules out is most of what a
-dashboard could plausibly do, and the reason is recorded there.
+Every substantive fix in this repository came from running the thing rather than reading
+it — seven runs, five defects, none of them findable in code review. The dashboard is
+the largest piece here with no live run behind it, and it was built against payloads
+that were *shaped like* real ones rather than taken from a real one.
 
-One thing it does not decide: the frontend stack. `apps/web/README.md` named Next.js
-during Milestone 0, before ADR-011 narrowed the pages; treat that as unsettled rather
-than as a standing decision.
+Read ADR-011 and ADR-012 before extending it. The scope they rule out is most of what a
+dashboard could plausibly do, and the reasons are recorded there.
 
 `docs/BACKLOG.md` holds everything else. Nothing in it blocks a milestone; the items are
 evidence still to gather, decisions with no deadline, and one standing task. Use the
@@ -274,7 +277,10 @@ the order they should be picked up, with what each one needs to be considered do
   and the reasoning is recorded in `docs/SECURITY_POLICY.md`; it is not a gap that has
   been overlooked, and it is a gap that must close before the API leaves localhost —
   which ADR-011 makes a prerequisite of shipping the dashboard anywhere but this machine.
-- Milestone 3 has no code. `apps/web/` is a README.
+- The dashboard has never been used on a live run. Its Python side has tests and its
+  render path was exercised outside a browser against payloads shaped like the real
+  contracts, but "an operator approved a real gate from the browser" is a claim nothing
+  here supports yet. `docs/BACKLOG.md` item 12.
 - `RunStore.append_event` opens the events file in append mode and carries the same
   transient-lock exposure on Windows that `save` was hardened against. It has never
   been observed failing, so it has been left alone rather than hardened on a guess.

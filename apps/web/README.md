@@ -1,30 +1,35 @@
 # Web — the operator dashboard
 
-Empty. Milestone 3 is defined and not started.
+Built. Served by the FastAPI app at **`/dashboard`**, so `make run` is all it takes:
 
-**ADR-011 is the scope.** Read it before writing anything here. Three slices, in order:
+```
+http://127.0.0.1:8000/dashboard/
+```
 
-1. **Run list and run detail** — every run, its state, its nodes, its event trail, and
-   its artifacts rendered rather than downloaded.
-2. **Approval inbox** — the pending gates across all runs, each showing its approval
-   package, with approve, request changes and reject.
-3. **Cancel** — stop a run from the interface.
+Source and its rules are in `static/README.md`. Scope is **ADR-011**, amended by
+**ADR-012**.
 
-Nothing else. In particular: no task authoring, no config editing, no strategy or
-workflow editing, no live log streaming. Submitting a task stays an API call.
+## What it does
 
-**No new backend surface.** `apps/api/app/routers/runs.py` already exposes list, detail,
-events, approval package, artifacts, decision and cancel. If a page needs something the
-API does not have, that is a signal to question the page, not to add an endpoint.
+- **Runs** — every run, its state, repair rounds, and what it is waiting on.
+- **Run detail** — the workflow DAG with the current position marked, the approval
+  package, artifacts rendered from JSON rather than downloaded, the workers and their
+  sessions, and the run's event trail.
+- **Approvals** — the pending gates across all runs; approve, request changes or reject.
+- **Cancel** — stop any non-terminal run.
+- **Workers** and **Policies** — configuration, read-only.
 
-**Do not expose it beyond `127.0.0.1`** before authentication lands — `docs/BACKLOG.md`
-item 5. ADR-011 records why a browser client changes the argument that
-`docs/SECURITY_POLICY.md` makes for a single-user local control plane.
+## What it deliberately does not do
 
-## What this file used to say
+No task authoring, no config or workflow editing, no live worker log streaming. The
+event trail stands in for logs and says so on the panel. Submitting a task stays an API
+call. ADR-011 records why: a mistake made through a UI on a system that runs agents with
+filesystem write access is expensive and quiet.
 
-It listed four pages — Overview, Run Control Center, Approval Inbox, Project Sources and
-Workspaces — and named Next.js. ADR-011 supersedes that list, and explicitly rejects the
-Overview page: counts of runs by state are the easiest thing to build and the least
-useful thing to have. The stack is unsettled rather than decided; Next.js was written
-here during Milestone 0, before the pages were narrowed to three.
+Nothing is fabricated. There is no estimated completion time and no "triggered by",
+because the control plane records neither.
+
+## Do not expose it beyond `127.0.0.1`
+
+The API has no authentication. `docs/BACKLOG.md` item 5 is the prerequisite, and the
+dashboard must not be the reason the API gets exposed before it lands.
