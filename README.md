@@ -36,15 +36,19 @@ established and what it did not.
 
 ## What is intentionally not included yet
 
-- **Web dashboard** — Milestone 3, scoped by ADR-011 and not started
 - **Authentication** — deliberate for a single-user local control plane
   (`docs/SECURITY_POLICY.md`), and required before the API leaves `127.0.0.1`
 - OpenCode integration
 - Parallel workflows
 - Autonomous swarm behavior
 
-The first two are scheduled. The last three are decisions recorded in
+Authentication is scheduled. The last three are decisions recorded in
 `docs/MVP_SCOPE.md`, not omissions.
+
+The **operator dashboard is built** — `make run`, then
+`http://127.0.0.1:8000/dashboard/`. It shows the workflow DAG with the run's position on
+it, the approval gates with approve/reject, artifacts rendered from JSON, and the run's
+event trail. It has not yet been used on a live run.
 
 ## Requirements
 
@@ -91,7 +95,7 @@ python scripts/validate_contracts.py
 | M0 Foundation | Architecture, contracts, policies, repository scaffold | done |
 | M1 CLI Capability Spike | Validate Claude Code and Codex headless execution | done |
 | M2 CLI Agent Bridge and Vertical Slice | Real worker adapters, process supervision, and analyze -> approve -> implement -> verify -> review -> approve driven end to end | done |
-| M3 Operator Dashboard | Run list and detail, approval inbox, cancel — over the existing API, nothing else (ADR-011) | current |
+| M3 Operator Dashboard | Run list and detail with the workflow DAG, approval inbox, cancel — nothing else (ADR-011, ADR-012) | built, not yet used on a live run |
 | M4 Reliability | Retry, heartbeat, restart recovery, worktree cleanup | planned |
 | M5 Expansion | OpenCode, parallel DAG, quota-aware routing | planned |
 

@@ -60,6 +60,9 @@ class RunSummary(BaseModel):
 class RunDetail(RunSummary):
     artifacts: dict[str, str]
     worktree: dict[str, str] | None
+    #: Worker name -> session id. Reported so an operator can tell which conversation a
+    #: repair round resumed; a session id identifies a transcript, not a credential.
+    sessions: dict[str, str]
     pending_approval: dict[str, Any] | None
 
     @classmethod
@@ -69,6 +72,7 @@ class RunDetail(RunSummary):
             **summary.model_dump(),
             artifacts=dict(record.artifacts),
             worktree=record.worktree,
+            sessions=dict(record.sessions),
             pending_approval=(
                 record.pending_approval.model_dump(exclude={"resume_after_node"})
                 if record.pending_approval

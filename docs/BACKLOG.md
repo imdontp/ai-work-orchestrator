@@ -223,60 +223,56 @@ The same reasoning applies before the work as after it.
 
 # Milestone 3 — the operator dashboard
 
-Scoped by **ADR-011**. Read it first: it rules out most of what a dashboard could
-plausibly do — no task authoring, no config or workflow editing, no live log streaming —
-and records why. Submitting a task stays an API call.
+Scoped by **ADR-011**, amended by **ADR-012**. Read both before touching `apps/web/`:
+together they rule out most of what a dashboard could plausibly do — no task authoring,
+no config or workflow editing, no live worker log streaming — and record why. Submitting
+a task stays an API call.
 
-**No new backend surface.** `apps/api/app/routers/runs.py` already exposes list, detail,
-events, approval package, artifacts, decision and cancel. If a page needs something the
-API does not have, that is a signal to question the page, not to add an endpoint.
+**The stack was settled by building it:** plain ES modules served by the FastAPI app
+itself, no build step and no npm dependency. Same-origin, which is the reason it was
+chosen: the API has no authentication, and a cross-origin dashboard would need CORS,
+which would make an unauthenticated control plane reachable from any page the operator
+has open. See item 5.
 
-**Undecided and needed before item 9:** the frontend stack. `apps/web/README.md` named
-Next.js during Milestone 0, before ADR-011 narrowed the pages to three. The trade is a
-real build toolchain and its dependency tree against a single self-contained page the
-existing FastAPI app serves — the second keeps the dashboard same-origin, which sidesteps
-CORS and therefore keeps item 5 off the critical path. Nothing in the ADRs settles it.
+## 9, 10, 11. The three slices — shipped together
 
-## 9. M3 slice 1 — run list and run detail
+The three slices were ordered to bound a first delivery. Once the shell that holds all
+of them existed the ordering stopped paying, so they landed in one change; ADR-012
+records that.
 
-Every run, its state, its nodes, its event trail, and its artifacts rendered rather than
-downloaded. This is the slice that makes the other two possible, and the one that proves
-whether the existing API is enough.
+**Slice 1 — run list and run detail.** Every run, its state, its nodes, its event trail
+and its artifacts rendered rather than downloaded. Verification renders as four separate
+facts — what the worker claimed, what the orchestrator verified, what the base revision
+already did, and what regressed — because a summary would flatten them into one, and
+run 7 recorded `claimed_passed: false` and `verified: true` at the same time, correctly.
 
-Artifacts matter most here. A run's output is JSON validated against `contracts/`, and
-reading it today means fetching an artifact by name and reading raw JSON. An analysis
-artifact is 7 KB of structured plan; a verification result carries `claimed_passed`,
-`verified`, `baseline` and `regressions`, which are four distinct facts that a human
-currently has to reconcile by hand.
+**Slice 2 — approval inbox.** The pending gates across all runs, each showing its
+package with approve, request changes and reject. A reason is required for anything but
+approval, and rejecting asks for confirmation because it cancels the run.
 
-**Done when:** a run driven end to end can be followed from the browser without reading
-`runs/` on disk or calling the API by hand, and the four verification facts are legible
-as four facts.
+**Slice 3 — cancel.** A button on any non-terminal run, with the reason prompted for and
+kept. `POST /runs/{run_id}/cancel` already worked against real CLIs — runs 4 and 5 — so
+this is a button, not new behaviour.
 
-## 10. M3 slice 2 — approval inbox
+**One endpoint was added,** `GET /workflows/{workflow_id}`, and ADR-012 explains why the
+graph view is impossible without it and what bounds it: configuration only, asserted by
+a test that fails if run state ever appears in the payload.
 
-The pending gates across all runs, each showing its approval package, with approve,
-request changes and reject.
+**What is not built, deliberately:** live worker log streaming. The dashboard shows the
+run's event trail instead, labelled on the panel as the audit trail rather than worker
+stdout. **What is left blank because the system does not record it:** estimated
+completion, and who triggered a run.
 
-This is the slice ADR-011 says the milestone exists for: the approval gates are the part
-a human is *required* for, and they are currently reachable only by hand-written HTTP
-calls. The high-risk gate shows a change list — run 1 found it counting dirty files
-instead of naming them — so the package has the content; nothing renders it.
+**Still unevidenced:** none of this has been driven against a live run yet. The render
+path was exercised outside the browser against payloads shaped like the real contracts,
+the endpoints were checked against a running server, and the Python side has tests — but
+"an operator approved a real gate from the browser" is a claim no test here supports.
+That arrives with the next live run, and is what item 3 is waiting for anyway.
 
-Blocked by item 9, which establishes how a run and its artifacts are displayed.
+## 12. Judge the dashboard against a live run
 
-**Done when:** a run paused at a gate can be approved or rejected from the browser, the
-decision reaches the same code path as the API call, and a rejected run is `CANCELLED`
-with the operator's reason kept.
+The first eight items were all found by running the thing. The dashboard has not been.
 
-## 11. M3 slice 3 — cancel from the interface
-
-Stop a running run without a terminal. `POST /runs/{run_id}/cancel` exists and works
-against real CLIs — runs 4 and 5 — so this is a button and a confirmation, not new
-behaviour.
-
-Last because it is the smallest and because rejecting at an approval gate already covers
-the common case of stopping a run that is waiting rather than working.
-
-**Done when:** a run cancelled from the browser reaches `CANCELLED`, the worker process
-is gone, and `repair_rounds` has not advanced.
+**Done when:** a run driven against the real CLIs has been watched from the browser
+start to finish, its plan gate approved there, and whatever that exposes is written down
+the way runs 1 to 7 were.

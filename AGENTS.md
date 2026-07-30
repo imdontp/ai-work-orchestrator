@@ -30,11 +30,14 @@ Build a reliable bridge between CLI agents. The platform must coordinate Claude 
 Milestone 1 CLI capability spike is complete: `docs/spikes/M1_CLI_CAPABILITY_REPORT.md`.
 The Milestone 2 execution slice is merged.
 
-**Milestone 3 is the current one: a read-mostly operator dashboard, scoped by ADR-011.**
-Three slices — run list and detail, approval inbox, cancel — over the existing HTTP
-surface, with **no new backend endpoints**. No task authoring, no config or workflow
-editing, no live log streaming. `apps/web/` holds a README and no code; `docs/BACKLOG.md`
-items 9 to 11 carry the work.
+**Milestone 3 is built and unevidenced.** The operator dashboard is in
+`apps/web/static/` — plain ES modules with no build step, served by the API itself at
+`/dashboard` so it is same-origin and needs no CORS. Scope is ADR-011: run list and
+detail, approval inbox, cancel, and nothing else — no task authoring, no config or
+workflow editing, no live worker log streaming. ADR-012 amends it with one endpoint,
+`GET /workflows/{workflow_id}`, which reads configuration only; a test fails if run
+state ever appears in its payload. No live run has been watched through the dashboard
+yet — `docs/BACKLOG.md` item 12.
 
 - **B1 — fixed.** The `ProcessManager` timeout path called `os.killpg`, which does not
   exist on Windows, and no WSL distribution is installed on the target machine.

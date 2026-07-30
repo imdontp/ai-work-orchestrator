@@ -133,3 +133,45 @@ exposed before that lands.
 **Rejected:** starting with an Overview page of aggregate numbers. Counts of runs by
 state are the easiest thing to build and the least useful thing to have; nobody is
 blocked on not knowing them. The approval inbox is what a human is actually waiting on.
+
+## ADR-012: The dashboard may read the workflow graph, and only that
+
+**Decision:** add one endpoint, `GET /api/v1/workflows/{workflow_id}`, returning the
+node graph of the configured workflow — ids, dependencies, worker requirement, agent
+profile, workspace kind, session policy, approval gates, and the execution order. This
+is an amendment to ADR-011's "no new backend surface", not an exception to be extended.
+
+The three M3 slices ship together rather than in sequence: run list and detail, the
+approval inbox, and cancel. They were ordered to bound the first delivery, and the
+ordering stopped paying once the shell that holds all three existed.
+
+**Reason:** a run record lists the nodes that have *completed*. It cannot say which
+nodes exist, how they depend on one another, which is a human gate, which writes to a
+worktree, or how many there are. A graph assembled from the event trail can only draw
+the past — nodes appear as they start, so the picture grows during the run and never
+shows what is still ahead. Progress has no denominator. Neither is a rendering problem
+that better client code would solve; the information is not in any response.
+
+The alternative was to drop the graph view. That was rejected because the graph is the
+one thing the interface offers that reading `runs/` on disk does not: the shape of the
+work, with the current position marked on it.
+
+**The boundary.** This endpoint reads *configuration* — a YAML file the repository
+ships, already validated at load time by `orchestrator/workflow/definition.py`. It
+touches no run, accepts no parameters beyond the id, and returns nothing that changes
+between two calls in the same process. `tests/test_dashboard.py` asserts that a run id,
+task id, artifact or task state never appears in its payload. ADR-011's rule stands for
+everything else: a page that needs run data the API does not have is a page to question.
+
+**One field was added to an existing response** rather than as a new route:
+`RunDetail.sessions`, the worker-to-session map the record already keeps. A session id
+identifies a transcript, not a credential.
+
+**What is still not built, deliberately:** live worker log streaming, which ADR-011
+rules out and which no endpoint exposes. The dashboard shows the run's event trail
+instead — `containment_armed`, `baseline_started`, `state_changed` and the rest. It is
+polled every four seconds, and says on the panel that it is the audit trail rather than
+worker stdout, so nobody mistakes one for the other.
+
+**What is not shown because the system does not record it:** an estimated completion
+time, and who triggered a run. Both are easy to fabricate and were left blank instead.
