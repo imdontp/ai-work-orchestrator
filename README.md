@@ -20,29 +20,31 @@ User task
 
 ## What is included
 
-- Product and architecture documentation
-- Domain model and workflow specification
-- Security and approval policy
-- JSON Schema contracts
-- FastAPI application scaffold
-- Deterministic state-machine baseline
-- Worker adapter interface
-- Safe subprocess execution baseline
-- Example workflow and prompts
-- Initial automated tests
+That slice runs. Seven runs have been driven against the real Claude Code and Codex
+CLIs, the last two against a real project; `docs/START_HERE.md` records what each one
+established and what it did not.
+
+- Product and architecture documentation, domain model, workflow spec, security policy
+- JSON Schema contracts, checked by `make validate`
+- FastAPI control plane — task intake, run control, events, artifacts, approvals, cancel
+- Deterministic state machine with an explicit transition table
+- Claude Code and Codex worker adapters, built on recorded argv templates
+- Git worktree lifecycle with orchestrator-owned containment (ADR-010)
+- Mechanical verification judged against the base revision, and bounded repair rounds
+- Run persistence on the filesystem or PostgreSQL, behind one contract
 - Docker Compose PostgreSQL service
 
 ## What is intentionally not included yet
 
-- Production Claude Code or Codex command adapters
-- Full database persistence
-- Git worktree lifecycle implementation
-- Web dashboard
+- **Web dashboard** — Milestone 3, scoped by ADR-011 and not started
+- **Authentication** — deliberate for a single-user local control plane
+  (`docs/SECURITY_POLICY.md`), and required before the API leaves `127.0.0.1`
 - OpenCode integration
 - Parallel workflows
 - Autonomous swarm behavior
 
-These are delivered in later milestones after the CLI capability spike validates real command behavior.
+The first two are scheduled. The last three are decisions recorded in
+`docs/MVP_SCOPE.md`, not omissions.
 
 ## Requirements
 
@@ -84,15 +86,18 @@ python scripts/validate_contracts.py
 
 ## Milestones
 
-| Milestone | Outcome |
-|---|---|
-| M0 Foundation | Architecture, contracts, policies, repository scaffold |
-| M1 CLI Capability Spike | Validate Claude Code and Codex headless execution |
-| M2 CLI Agent Bridge | Real worker adapters and process supervision |
-| M3 Vertical Slice | Analyze -> approve -> implement -> verify -> review -> approve |
-| M4 Reliability | Retry, heartbeat, restart recovery, worktree cleanup |
-| M5 Dashboard | Overview, task queue, run DAG, logs, artifacts, approvals |
-| M6 Expansion | OpenCode, parallel DAG, quota-aware routing |
+| Milestone | Outcome | Status |
+|---|---|---|
+| M0 Foundation | Architecture, contracts, policies, repository scaffold | done |
+| M1 CLI Capability Spike | Validate Claude Code and Codex headless execution | done |
+| M2 CLI Agent Bridge and Vertical Slice | Real worker adapters, process supervision, and analyze -> approve -> implement -> verify -> review -> approve driven end to end | done |
+| M3 Operator Dashboard | Run list and detail, approval inbox, cancel — over the existing API, nothing else (ADR-011) | current |
+| M4 Reliability | Retry, heartbeat, restart recovery, worktree cleanup | planned |
+| M5 Expansion | OpenCode, parallel DAG, quota-aware routing | planned |
+
+The vertical slice originally listed as its own milestone landed inside M2, which is why
+the dashboard is M3 here and not M5. ADR-011 narrows it: an overview page of aggregate
+counts is explicitly rejected, and the approval inbox is the reason the milestone exists.
 
 ## Core principles
 

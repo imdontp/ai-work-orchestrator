@@ -30,6 +30,12 @@ Build a reliable bridge between CLI agents. The platform must coordinate Claude 
 Milestone 1 CLI capability spike is complete: `docs/spikes/M1_CLI_CAPABILITY_REPORT.md`.
 The Milestone 2 execution slice is merged.
 
+**Milestone 3 is the current one: a read-mostly operator dashboard, scoped by ADR-011.**
+Three slices — run list and detail, approval inbox, cancel — over the existing HTTP
+surface, with **no new backend endpoints**. No task authoring, no config or workflow
+editing, no live log streaming. `apps/web/` holds a README and no code; `docs/BACKLOG.md`
+items 9 to 11 carry the work.
+
 - **B1 — fixed.** The `ProcessManager` timeout path called `os.killpg`, which does not
   exist on Windows, and no WSL distribution is installed on the target machine.
   Termination is now platform-dispatched, and the POSIX branch is exercised against a
