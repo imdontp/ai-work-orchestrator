@@ -7,17 +7,20 @@
  */
 
 import { duration, el, workerTag } from "./dom.js";
+import { icon } from "./icons.js";
 import { COMPLETED, FAILED, RUNNING, WAITING, layout } from "./runstate.js";
 
 const MARK = {
-  [COMPLETED]: { glyph: "✓", label: "Completed" },
-  [RUNNING]: { glyph: "◐", label: "In Progress" },
-  [FAILED]: { glyph: "✕", label: "Failed" },
-  [WAITING]: { glyph: "⏸", label: "Awaiting approval" },
+  [COMPLETED]: { glyph: "check", label: "Completed" },
+  [RUNNING]: { glyph: "refresh", label: "In Progress" },
+  [FAILED]: { glyph: "cross", label: "Failed" },
+  [WAITING]: { glyph: "pause", label: "Awaiting approval" },
 };
 
+const PER_ROW = 4;
+
 export function dag(workflow, states) {
-  const { rows } = layout(workflow);
+  const { rows, perRow } = layout(workflow, PER_ROW);
   const parts = [];
 
   rows.forEach((row, rowIndex) => {
@@ -29,25 +32,41 @@ export function dag(workflow, states) {
       }
       cells.push(nodeCard(cell.node, cell.number, states.get(cell.node.id), workflow));
     });
+
+    // Pad short rows so every card is the same width. A row holding one node used to
+    // stretch it across the whole panel.
+    for (let pad = row.cells.length; pad < perRow; pad += 1) {
+      cells.push(el("div", { class: "link" }));
+      cells.push(el("div", { class: "node spacer", "aria-hidden": "true" }));
+    }
+
     parts.push(el("div", { class: `dag-row${row.reversed ? " rtl" : ""}` }, cells));
 
     const next = rows[rowIndex + 1];
     if (next) {
       const from = row.cells[row.cells.length - 1];
-      const to = next.cells[0];
-      const live = isActiveEdge(states, from.node.id, to.node.id);
+      const live = isActiveEdge(states, from.node.id, next.cells[0].node.id);
+      // The chain leaves a left-to-right row at its right edge and a reversed row at
+      // its left, so the stem sits under the end it actually leaves from.
       parts.push(
-        el("div", { class: `turn${row.reversed ? " left" : ""}${live ? " active" : ""}` }, ["↓"]),
+        el("div", { class: `turn ${row.reversed ? "left" : "right"}${live ? " active" : ""}` }, [
+          el("div", { class: "stem" }, [icon("arrowDown", { size: 18 })]),
+        ]),
       );
     }
   });
 
-  return el("div", { class: "dag" }, [...parts, legend()]);
+  return el("div", { class: "dag" }, [
+    el("div", { class: "dag-scale", id: "dagscale" }, parts),
+    legend(),
+  ]);
 }
 
 function connector(states, fromId, toId, reversed) {
   const live = isActiveEdge(states, fromId, toId);
-  return el("div", { class: `link${live ? " active" : ""}`, text: reversed ? "←" : "→" });
+  return el("div", { class: `link${live ? " active" : ""}` }, [
+    icon(reversed ? "arrowLeft" : "arrowRight", { size: 18 }),
+  ]);
 }
 
 /** An edge is live when its source is done and its target is the one being worked on. */
@@ -70,24 +89,22 @@ function nodeCard(node, number, state, workflow) {
     el("div", { class: "top" }, [
       el("span", { class: "num", text: String(number) }),
       el("span", { class: "grow" }),
-      node.is_human ? el("span", { text: "☖" }) : null,
-      node.needs_worktree ? el("span", { title: "isolated worktree", text: "⌘" }) : null,
+      node.is_human ? icon("human", { size: 13 }) : null,
+      node.needs_worktree ? icon("worktree", { size: 13 }) : null,
     ]),
     el("div", { class: "title", text: node.id }),
     el("div", { class: "foot" }, [
       el("span", { class: "st" }, [
-        el("span", { text: mark ? mark.glyph : "○" }),
+        icon(mark ? mark.glyph : "pending", { size: 12 }),
         mark ? mark.label : "Pending",
       ]),
-      el("span", { text: state?.seconds != null ? duration(state.seconds) : "" }),
+      state?.seconds != null ? el("span", { text: duration(state.seconds) }) : null,
     ]),
     el("div", { class: "foot" }, [
       workerTag(node.worker_requirement),
-      state?.attempts > 1 ? el("span", { class: "warn", text: `${state.attempts} attempts` }) : null,
+      state?.attempts > 1 ? el("span", { class: "warn", text: `${state.attempts}×` }) : null,
     ]),
-    undrawn.length
-      ? el("div", { class: "foot faint", text: `also after ${undrawn.join(", ")}` })
-      : null,
+    undrawn.length ? el("div", { class: "also", text: `also after ${undrawn.join(", ")}` }) : null,
   ]);
 }
 
@@ -112,6 +129,7 @@ function legend() {
     swatch("var(--accent)", "In Progress"),
     swatch("var(--warn)", "Awaiting approval"),
     swatch("var(--line)", "Pending"),
-    el("span", { class: "faint" }, ["☖ human gate · ⌘ isolated worktree"]),
+    el("span", {}, [icon("human", { size: 12 }), "human gate"]),
+    el("span", {}, [icon("worktree", { size: 12 }), "isolated worktree"]),
   ]);
 }

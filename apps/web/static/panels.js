@@ -14,6 +14,7 @@ import {
   el,
   empty,
   frag,
+  moreLink,
   panel,
   row,
   stateBadge,
@@ -21,6 +22,7 @@ import {
   time,
   workerTag,
 } from "./dom.js";
+import { icon } from "./icons.js";
 import { RUNNING, progress } from "./runstate.js";
 
 /** Past this, rendering a JSON tree costs more than it is worth. */
@@ -32,7 +34,9 @@ const MAX_RENDERED_CHARS = 200_000;
 
 export function overviewPanel(run, workflow) {
   const bar = progress(run, workflow);
-  return panel("Run Overview", { icon: "◷", badge: el("span", { class: "mono faint", text: run.run_id }) },
+  return panel(
+    "Run Overview",
+    { glyph: "clock", badge: el("span", { class: "mono faint", text: run.run_id }) },
     el("div", { class: "rows" }, [
       row("Started", frag([time(run.created_at), el("span", { class: "faint", text: ` · ${ago(run.created_at)}` })])),
       row("Task", el("span", { class: "mono", text: run.task_id })),
@@ -94,8 +98,9 @@ export function workersPanel(run, workflow, capabilities, states) {
   return panel(
     "Workers",
     {
-      icon: "⚇",
+      glyph: "workers",
       badge: badge(`${configured.length} configured`, configured.length ? "ok" : "idle"),
+      foot: moreLink("#/workers", "View all workers"),
     },
     configured.length ? frag(cards) : empty("No worker adapters are configured."),
   );
@@ -126,7 +131,7 @@ export function approvalPanel(run, { onDecide, pending } = {}) {
   if (!approval) {
     return panel(
       "Approval Package",
-      { icon: "⛉" },
+      { glyph: "approvals" },
       empty(
         run.awaiting_decision
           ? "This run is waiting, but the package could not be read."
@@ -145,25 +150,28 @@ export function approvalPanel(run, { onDecide, pending } = {}) {
   return panel(
     "Approval Package",
     {
-      icon: "⛉",
+      glyph: "approvals",
       badge: badge(
         `${approval.risk_level} risk`,
         RISK_TONE[String(approval.risk_level).toLowerCase()] ?? "warn",
       ),
     },
     frag([
-      el("div", { class: "rows" }, [
+      el("div", { class: "rows labelled" }, [
         row("Gate", el("span", { class: "mono", text: approval.approval_type })),
-        row("What changed", el("span", { class: "wrap", text: approval.summary || "—" })),
-        row("Files affected", String(approval.changes?.length ?? 0)),
+        row("What changed", el("span", { text: approval.summary || "—" })),
+        row("Files affected", `${approval.changes?.length ?? 0} file(s)`),
       ]),
-      listBlock("Changes", approval.changes),
-      listBlock("Evidence", approval.evidence),
-      listBlock("Risks", approval.risks),
+      // Collapsed by default. The four rows above are the decision; these are the
+      // backing detail, and expanded they pushed the buttons - and the run's event
+      // trail below them - off a laptop screen.
+      foldout("Changes", approval.changes),
+      foldout("Evidence", approval.evidence),
+      foldout("Risks", approval.risks, { open: true }),
       reason,
       el("div", { class: "actions" }, [
         el("button", { class: "primary", disabled: busy || null, on: { click: act("approve") } }, [
-          busy === "approve" ? el("span", { class: "spin" }) : "✓",
+          busy === "approve" ? el("span", { class: "spin" }) : icon("check", { size: 14 }),
           "Approve",
         ]),
         el("button", { disabled: busy || null, on: { click: act("request_changes") } }, [
@@ -187,9 +195,11 @@ export function approvalPanel(run, { onDecide, pending } = {}) {
 export function artifactsPanel(run, artifacts, workflow) {
   const entries = Object.entries(run.artifacts ?? {});
   if (entries.length === 0) {
-    return panel("Artifacts", { icon: "❑", badge: badge("0 items", "idle") }, empty(
-      "No artifact has been produced yet.",
-    ));
+    return panel(
+      "Artifacts",
+      { glyph: "artifact", badge: badge("0 items", "idle") },
+      empty("No artifact has been produced yet."),
+    );
   }
 
   const rows = entries.map(([nodeId, name]) => {
@@ -198,21 +208,33 @@ export function artifactsPanel(run, artifacts, workflow) {
     const size = loaded?.ok ? JSON.stringify(loaded.value).length : null;
     return el("details", { class: "art" }, [
       el("summary", {}, [
-        el("span", { class: "mono", style: "min-width:20ch", text: name }),
-        el("span", { class: "tag", text: extension(name) }),
-        el("span", { class: "faint mono", style: "min-width:8ch", text: size ? bytes(size) : "—" }),
-        el("span", { class: "grow" }),
-        node ? workerTag(node.worker_requirement) : el("span", { class: "tag", text: nodeId }),
+        el("span", { class: "mono", style: "flex:1 1 auto", text: name }),
+        el("span", { style: "flex:0 0 52px" }, [el("span", { class: "tag", text: extension(name) })]),
+        el("span", {
+          class: "faint mono",
+          style: "flex:0 0 68px",
+          text: size ? bytes(size) : "—",
+        }),
+        el("span", { style: "flex:0 0 120px" }, [
+          node ? workerTag(node.worker_requirement) : el("span", { class: "tag", text: nodeId }),
+        ]),
         loaded && !loaded.ok ? el("span", { class: "bad", text: "unreadable" }) : null,
       ]),
       el("div", { class: "inner" }, [artifactBody(run, name, loaded)]),
     ]);
   });
 
+  const head = el("div", { class: "art-head" }, [
+    el("span", { style: "flex:1 1 auto", text: "Name" }),
+    el("span", { style: "flex:0 0 52px", text: "Type" }),
+    el("span", { style: "flex:0 0 68px", text: "Size" }),
+    el("span", { style: "flex:0 0 120px", text: "Source" }),
+  ]);
+
   return panel(
     "Artifacts",
-    { icon: "❑", badge: badge(`${entries.length} items`, "idle"), flush: true },
-    frag(rows),
+    { glyph: "artifact", badge: badge(`${entries.length} items`, "idle"), flush: true },
+    frag([head, ...rows]),
   );
 }
 
@@ -393,6 +415,21 @@ function factCard(key, value, tone, note) {
   ]);
 }
 
+/** A collapsed list with its count in the summary, so nothing is hidden silently. */
+function foldout(title, items, { open = false } = {}) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return el("details", { class: "fold", open: open || null }, [
+    el("summary", {}, [title, el("span", { class: "tag", text: String(items.length) })]),
+    el(
+      "ul",
+      { class: "plain tight" },
+      items.map((item) =>
+        el("li", {}, [typeof item === "object" && item !== null ? renderValue(item) : String(item)]),
+      ),
+    ),
+  ]);
+}
+
 function listBlock(title, items) {
   if (!Array.isArray(items) || items.length === 0) return null;
   return frag([
@@ -438,11 +475,14 @@ export function logsPanel(events, { onClear } = {}) {
   return panel(
     "Run Logs",
     {
-      icon: ">_",
+      glyph: "terminal",
       badge: badge(`${events.length} events`, "idle"),
       actions: [
-        el("span", { class: "faint", style: "font-size:11.5px", text: "the run's audit trail, not worker stdout" }),
-        onClear ? el("button", { class: "ghost", on: { click: onClear } }, ["Collapse"]) : null,
+        el("span", {
+          class: "faint",
+          style: "font-size:11.5px",
+          text: "the run's audit trail, not worker stdout",
+        }),
       ],
       flush: true,
     },

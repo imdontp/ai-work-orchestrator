@@ -24,6 +24,7 @@ ASSETS = (
     "api.js",
     "dom.js",
     "graph.js",
+    "icons.js",
     "panels.js",
     "runstate.js",
     "views.js",
