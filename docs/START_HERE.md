@@ -209,11 +209,25 @@ different repositories. `docs/BACKLOG.md` item 8.
 
 ### Still unevidenced
 
-A review returning `request_changes` and a containment violation have unit coverage and
-no live run behind them. Each needs a worker to fail in a particular way, and seven runs
-suggest that is hard to arrange with workers that report honestly — run 2's implementer
-declined a loophole it had been shown and reported `blocked` instead, and run 7's
-reviewer passed work that deserved to pass.
+**A review returning `request_changes`** has unit coverage and no live run behind it.
+It needs a worker to produce something defensible enough to verify and weak enough to
+object to, and seven runs suggest that is hard to arrange with workers that report
+honestly — run 2's implementer declined a loophole it had been shown and reported
+`blocked` instead, and run 7's reviewer passed work that deserved to pass. It stays open
+by its nature, not for want of trying.
+
+**A containment violation will not be evidenced, and that is a decision.** The
+interesting case is a worker that writes outside its workspace *without being told to*,
+which cannot be scheduled by definition. A harness that instructs a worker to escape
+would demonstrate only that an instructed escape is caught, which
+`tests/test_workflow_runner.py` already shows with `FakeAdapter.escape_write`.
+
+What supports the rule instead is narrower but real: the deny barrier is exercised
+directly by the write-barrier tests, `WorkspaceContainment` is proven by unit tests on
+both platforms — `scripts/verify_posix.sh` covers the POSIX side in a container — and
+every live run has logged `containment_armed` on every write-capable node, with the
+primary checkout confirmed untouched afterwards each time. The enforcement path is
+tested; only a worker spontaneously misbehaving is not, and it cannot be.
 
 ## Recommended next action
 

@@ -284,8 +284,9 @@ def test_the_implementation_node_gets_its_own_worktree(harness) -> None:
     worktree_path = Path(record.worktree["path"])
     assert codex.requests[0].workspace == worktree_path
     assert worktree_path != runner.config.repository
-    # The analysis node stayed on the primary checkout, read-only.
-    assert claude.requests[0].workspace == runner.config.repository
+    # The analysis node reads the same worktree, but read-only: one revision per run,
+    # and only the write node may write to it.
+    assert claude.requests[0].workspace == worktree_path
     assert claude.requests[0].filesystem_access == "read_only"
     assert codex.requests[0].filesystem_access == "scoped_write"
 
@@ -313,8 +314,54 @@ def test_a_read_only_node_depending_on_a_write_node_reads_the_worktree(harness) 
     # It reads the worktree; it does not get write access to it.
     assert review_request.filesystem_access == "read_only"
     assert review_request.tool_access == "read"
-    # The analysis node has no write dependency, so it stays on the primary checkout.
+    # Every node in the run saw that one worktree, including the analysis that ran
+    # before any write node. A live run had the analyst plan around an untracked file
+    # in the developer's checkout that the implementer, working from HEAD, never saw.
+    assert {request.workspace for request in claude.requests} == {worktree_path}
+    assert runner.config.repository not in {r.workspace for r in claude.requests}
+
+
+def test_the_worktree_exists_before_the_first_node_that_writes(harness) -> None:
+    """One revision per run. The analysis must not read a tree the implementer lacks."""
+    runner, claude, codex, store = harness
+    claude.queue(structured_result={"plan": []})
+
+    runner.create_run("RUN-1")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    # Paused at the plan gate: only the analysis has run, and the worktree is already
+    # there rather than waiting for the implement node to create it.
+    assert record.completed_nodes == ["analyze"]
+    assert record.worktree is not None
+    assert claude.requests[0].workspace == Path(record.worktree["path"])
+    assert "worktree_created" in _kinds(store, "RUN-1")
+
+
+def test_a_workflow_with_no_write_node_reads_the_checkout_directly(harness) -> None:
+    """Nothing to isolate, so nothing is isolated - no worktree is created at all."""
+    runner, claude, _, store = harness
+    read_only = {
+        "workflow_id": "read-only-slice",
+        "version": "0.1.0",
+        "nodes": [
+            {
+                "id": "analyze",
+                "agent_profile": "task-analyst",
+                "worker_requirement": "claude_code",
+                "expected_artifact": "analysis.json",
+                "approval_after": "plan",
+            },
+        ],
+    }
+    runner.workflow = WorkflowDefinition.model_validate(read_only)
+    claude.queue(structured_result={"plan": []})
+
+    runner.create_run("RUN-1")
+    record = asyncio.run(runner.advance("RUN-1"))
+
+    assert record.worktree is None
     assert claude.requests[0].workspace == runner.config.repository
+    assert "worktree_created" not in _kinds(store, "RUN-1")
 
 
 def test_review_runs_in_a_fresh_session(harness) -> None:

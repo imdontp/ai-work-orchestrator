@@ -126,6 +126,16 @@ class WorkflowDefinition(BaseModel):
 
         return tuple(ordered)
 
+    @property
+    def has_write_node(self) -> bool:
+        """Does any node in this graph write to a worktree?
+
+        When one does, every node in the run reads that worktree, so they all reason
+        about the same revision. When none does, there is nothing to isolate and the
+        primary checkout is read directly.
+        """
+        return any(node.needs_worktree for node in self.nodes)
+
     def depends_on_write_node(self, node_id: str) -> bool:
         """Does this node transitively depend on one that writes to a worktree?
 

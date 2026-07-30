@@ -96,3 +96,40 @@ refuses to claim it does; there is no state where it reports success and is poro
 
 The orchestrator must not run as root on POSIX. Detection still works there, but
 prevention does not, and `arm()` will refuse rather than proceed on one layer.
+
+## ADR-011: Milestone 3 is a read-mostly operator dashboard
+
+**Decision:** M3 delivers a web dashboard over the existing HTTP surface, in that order:
+
+1. **Run list and run detail** — every run, its state, its nodes, its event trail, and
+   its artifacts rendered rather than downloaded.
+2. **Approval inbox** — the pending gates across all runs, each showing its approval
+   package, with approve, request changes and reject.
+3. **Cancel** — stop a run from the interface.
+
+Nothing else. In particular: no task authoring, no config editing, no strategy or
+workflow editing, no live log streaming. Submitting a task stays an API call.
+
+**Reason:** the orchestrator's approval gates are the part a human is required for, and
+they are currently reachable only by hand-written HTTP calls. That is the friction worth
+removing. Everything else the interface could do is either already easy from the API or
+is a way to change the system's behaviour from a browser, which is the class of feature
+`docs/MVP_SCOPE.md` keeps out for the same reason it keeps the dashboard read-only in
+spirit: a mistake made through a UI on a system that runs agents with filesystem write
+access is expensive and quiet.
+
+**No new backend surface.** The API already exposes list, detail, events, approval,
+artifacts, decision and cancel. If a page needs something the API does not have, that is
+a signal to question the page, not to add an endpoint.
+
+**Consequence — the API stops being safe to leave unauthenticated by default.** A
+browser client means CORS, and CORS means an origin that is not the terminal the operator
+typed in. `docs/SECURITY_POLICY.md` justifies no-authentication for a single-user local
+control plane driven from the same machine; a dashboard widens who can reach it. So
+`docs/BACKLOG.md` item 5 becomes a prerequisite of shipping the dashboard beyond
+localhost, not a someday item — and the dashboard must not be the reason the API gets
+exposed before that lands.
+
+**Rejected:** starting with an Overview page of aggregate numbers. Counts of runs by
+state are the easiest thing to build and the least useful thing to have; nobody is
+blocked on not knowing them. The approval inbox is what a human is actually waiting on.

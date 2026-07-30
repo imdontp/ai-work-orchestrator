@@ -608,20 +608,38 @@ class WorkflowRunner:
     ) -> tuple[Worktree | None, Path]:
         """Decide which directory this node sees.
 
-        A write node gets the run's worktree. So does a read-only node that depends on
-        one: a reviewer pointed at the primary checkout reviews code that predates the
-        work it was asked about, which a live run caught happening. Everything else
-        reads the primary checkout.
+        Every node in a run that writes anywhere sees the same worktree, so every node
+        reasons about the same revision.
+
+        A live run showed why that matters: the analyst read the primary checkout, which
+        carried an untracked file the developer had not committed, and planned around
+        it. The implementer got a worktree from ``HEAD`` and never saw that file. The
+        outcome happened to match, because the implementer wrote the file itself, but
+        the two nodes were describing different repositories and the analysis read as
+        though it were about the committed state.
+
+        A reviewer pointed at the primary checkout has the same problem in the other
+        direction: it reviews code that predates the work it was asked about, which an
+        earlier live run caught happening.
+
+        A workflow with no write node at all has nothing to isolate, so it reads the
+        primary checkout directly.
         """
         if node.needs_worktree:
             worktree = self._worktree_for(record, node)
             return worktree, worktree.path
 
-        if record.worktree is not None and self.workflow.depends_on_write_node(node.id):
-            worktree = self._recorded_worktree(record)
-            return worktree, worktree.path
+        if not self.workflow.has_write_node:
+            return None, self.config.repository
 
-        return None, self.config.repository
+        # Read-only, but this run will produce a worktree. Create it now rather than at
+        # the first write node, so the nodes that run before it see the same revision.
+        worktree = (
+            self._recorded_worktree(record)
+            if record.worktree is not None
+            else self._worktree_for(record, node)
+        )
+        return worktree, worktree.path
 
     @staticmethod
     def _recorded_worktree(record: RunRecord) -> Worktree:
